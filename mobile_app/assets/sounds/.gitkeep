@@ -1,0 +1,5 @@
+# Place sound files here:
+# - enemy_territory.mp3 (when entering enemy zone)
+# - poster_detected.mp3 (when poster is scanned)
+# - join_room.mp3 (when joining a battle)
+# - territory_captured.mp3 (when capturing territory)

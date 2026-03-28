@@ -1,0 +1,12 @@
+{
+  "name": "itec-override-scripts",
+  "version": "1.0.0",
+  "description": "Utility scripts for iTEC OVERRIDE",
+  "scripts": {
+    "generate-qr": "node generate_qr_codes.js",
+    "copy-posters": "node copy_posters.js"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.3"
+  }
+}
