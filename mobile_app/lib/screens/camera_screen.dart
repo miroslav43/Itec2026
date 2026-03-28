@@ -14,6 +14,7 @@ import '../widgets/poster_selector_dialog.dart';
 import '../widgets/team_selector.dart';
 import '../widgets/connection_status.dart';
 import 'battle_canvas_screen.dart';
+import 'ar_scan_screen.dart';
 
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key});
@@ -105,7 +106,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         setState(() => _detectedPosterId = result.posterId);
         HapticService.successVibration();
         AudioService.playPosterDetectedSound();
-        await Future.delayed(const Duration(milliseconds: 800));
+        await Future.delayed(const Duration(milliseconds: 600));
         if (mounted && _detectedPosterId != null) {
           final pid = _detectedPosterId!;
           final imageUrl = pid.startsWith('custom_')
@@ -114,7 +115,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
           final customName = pid.startsWith('custom_')
               ? GptVisionService.getPosterName(pid)
               : null;
-          _openBattleCanvas(pid, posterName: customName, posterImageUrl: imageUrl);
+          _showPosterOptions(pid, posterName: customName, posterImageUrl: imageUrl);
         }
       } else if (result.looksLikePoster && result.posterId == null && mounted) {
         _showAddPosterDialog(result.croppedBytes);
@@ -253,6 +254,32 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     );
   }
   
+  void _showPosterOptions(String posterId, {String? posterName, String? posterImageUrl}) {
+    setState(() => _detectedPosterId = null);
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isDismissible: true,
+      builder: (_) => _PosterOptionsSheet(
+        posterId: posterId,
+        posterName: posterName ?? posterId,
+        onEnterBattle: () {
+          Navigator.pop(context);
+          _openBattleCanvas(posterId, posterName: posterName, posterImageUrl: posterImageUrl);
+        },
+        onViewAR: () {
+          Navigator.pop(context);
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => ArScanScreen(targetPosterId: posterId),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   void _openBattleCanvas(String posterId, {String? posterName, String? posterImageUrl}) {
     final appState = context.read<AppStateProvider>();
     appState.setCurrentPoster(posterId);
@@ -869,5 +896,158 @@ class ScanOverlayPainter extends CustomPainter {
   @override
   bool shouldRepaint(ScanOverlayPainter oldDelegate) {
     return oldDelegate.isDetected != isDetected;
+  }
+}
+
+class _PosterOptionsSheet extends StatelessWidget {
+  final String posterId;
+  final String posterName;
+  final VoidCallback onEnterBattle;
+  final VoidCallback onViewAR;
+
+  const _PosterOptionsSheet({
+    required this.posterId,
+    required this.posterName,
+    required this.onEnterBattle,
+    required this.onViewAR,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0D1117),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppTheme.neonCyan.withOpacity(0.6), width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: AppTheme.neonCyan.withOpacity(0.15),
+            blurRadius: 20,
+            spreadRadius: 2,
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 40, height: 4,
+            decoration: BoxDecoration(
+              color: Colors.white24,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppTheme.neonGreen.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppTheme.neonGreen.withOpacity(0.4)),
+                ),
+                child: Icon(Icons.check_circle, color: AppTheme.neonGreen, size: 28),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'POSTER DETECTAT',
+                      style: TextStyle(
+                        color: AppTheme.neonCyan,
+                        fontSize: 11,
+                        letterSpacing: 2,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      posterName,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
+          Row(
+            children: [
+              Expanded(
+                child: _OptionButton(
+                  label: 'ENTER BATTLE',
+                  icon: Icons.sports_esports,
+                  color: AppTheme.neonPink,
+                  onTap: onEnterBattle,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _OptionButton(
+                  label: 'VIEW AR',
+                  icon: Icons.view_in_ar,
+                  color: AppTheme.neonCyan,
+                  onTap: onViewAR,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+}
+
+class _OptionButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _OptionButton({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.12),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withOpacity(0.5), width: 1.5),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, color: color, size: 26),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.5,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

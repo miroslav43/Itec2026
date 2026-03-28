@@ -195,20 +195,32 @@ afis10: bright yellow background, large "<itec>" logo only
       content.add({'type': 'text', 'text': 'Identify the scanned poster below. Reply with ONLY the poster ID or "unknown":'}); 
       content.add({'type': 'image_url', 'image_url': {'url': 'data:image/jpeg;base64,$b64', 'detail': 'low'}});
 
-      final response = await http.post(
-        Uri.parse(_openAiUrl),
-        headers: {
-          'Authorization': 'Bearer $_apiKey',
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({
-          'model': 'gpt-4o-mini',
-          'messages': [
-            {'role': 'user', 'content': content}
-          ],
-          'max_tokens': 20,
-        }),
-      ).timeout(const Duration(seconds: 20));
+      http.Response? response;
+      for (int attempt = 0; attempt < 3; attempt++) {
+        try {
+          response = await http.post(
+            Uri.parse(_openAiUrl),
+            headers: {
+              'Authorization': 'Bearer $_apiKey',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({
+              'model': 'gpt-4o-mini',
+              'messages': [
+                {'role': 'user', 'content': content}
+              ],
+              'max_tokens': 20,
+            }),
+          ).timeout(const Duration(seconds: 20));
+          break;
+        } catch (e) {
+          debugPrint('GptVision attempt ${attempt + 1} failed: $e');
+          if (attempt < 2) await Future.delayed(const Duration(seconds: 1));
+        }
+      }
+      if (response == null) {
+        return const GptResult(posterId: null, looksLikePoster: false);
+      }
 
       if (response.statusCode == 200) {
         final body = jsonDecode(response.body) as Map<String, dynamic>;
