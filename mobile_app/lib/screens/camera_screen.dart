@@ -118,6 +118,15 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         }
       } else if (result.looksLikePoster && result.posterId == null && mounted) {
         _showAddPosterDialog(result.croppedBytes);
+      } else if (!result.looksLikePoster && result.posterId == null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Nu este un poster recunoscut'),
+            backgroundColor: Colors.black87,
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 2),
+          ),
+        );
       }
     } catch (e) {
       debugPrint('GPT detection error: $e');

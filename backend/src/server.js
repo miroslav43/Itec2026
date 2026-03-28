@@ -9,6 +9,7 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { pool, initDB } = require('./db');
+const Jimp = require('jimp');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'itec_override_secret_2025';
 
@@ -82,11 +83,17 @@ function saveCustomPosters() {
 async function loadCustomPostersFromDB() {
   try {
     const { rows } = await pool.query('SELECT * FROM posters WHERE is_custom = true');
+    // Clear stale custom posters (JSON may have entries deleted from DB)
+    for (const id of Object.keys(customPosters)) {
+      delete POSTERS[id];
+    }
+    customPosters = {};
     for (const row of rows) {
       const entry = { id: row.id, name: row.name, description: row.description, imageUrl: row.image_url, gridSize: row.grid_size, isCustom: true };
       customPosters[row.id] = entry;
       POSTERS[row.id] = entry;
     }
+    saveCustomPosters(); // sync JSON to match DB
     console.log(`Loaded ${rows.length} custom posters from DB`);
   } catch (e) { console.error('DB load posters error:', e); }
 }
@@ -265,6 +272,46 @@ app.get('/api/teams', (req, res) => {
 
 app.get('/api/custom-posters', (req, res) => {
   res.json(Object.values(customPosters));
+});
+
+app.post('/api/custom-posters/match', async (req, res) => {
+  const { imageBase64 } = req.body;
+  if (!imageBase64) return res.status(400).json({ error: 'imageBase64 required' });
+
+  const ids = Object.keys(customPosters);
+  if (ids.length === 0) return res.json({ posterId: null, confidence: 0 });
+
+  try {
+    const imgBuffer = Buffer.from(imageBase64, 'base64');
+    const scanned = await Jimp.read(imgBuffer);
+    scanned.resize(16, 16).grayscale();
+    const sp = [];
+    scanned.scan(0, 0, 16, 16, (x, y, idx) => sp.push(scanned.bitmap.data[idx]));
+
+    let bestId = null;
+    let bestScore = 0;
+
+    for (const id of ids) {
+      const filepath = path.join(CUSTOM_POSTERS_DIR, `${id}.jpg`);
+      if (!fs.existsSync(filepath)) continue;
+      try {
+        const stored = await Jimp.read(filepath);
+        stored.resize(16, 16).grayscale();
+        const tp = [];
+        stored.scan(0, 0, 16, 16, (x, y, idx) => tp.push(stored.bitmap.data[idx]));
+        let diff = 0;
+        for (let i = 0; i < sp.length; i++) diff += Math.abs(sp[i] - tp[i]);
+        const score = 1 - diff / (sp.length * 255);
+        if (score > bestScore) { bestScore = score; bestId = id; }
+      } catch (e) { console.error(`Match error for ${id}:`, e); }
+    }
+
+    const THRESHOLD = 0.70;
+    res.json({ posterId: bestScore >= THRESHOLD ? bestId : null, confidence: bestScore });
+  } catch (e) {
+    console.error('Match endpoint error:', e);
+    res.status(500).json({ error: 'Image processing failed' });
+  }
 });
 
 app.post('/api/custom-posters', async (req, res) => {

@@ -100,7 +100,7 @@ class _BattleCanvasScreenState extends State<BattleCanvasScreen> {
 
   Future<void> _checkWinCondition(Territory territory, String myTeamId) async {
     for (final entry in territory.teams.entries) {
-      if (entry.value.percentage >= 80) {
+      if (entry.value.percentage >= 60) {
         // Mark battle ended immediately to stop re-triggers
         setState(() => _battleEnded = true);
         final isWinner = entry.key == myTeamId;
@@ -134,7 +134,7 @@ class _BattleCanvasScreenState extends State<BattleCanvasScreen> {
 
     // Warn player when enemy team is close to winning (≥60%)
     for (final entry in territory.teams.entries) {
-      if (entry.key != myTeamId && entry.value.percentage >= 60) {
+      if (entry.key != myTeamId && entry.value.percentage >= 40) {
         HapticService.enemyDominatingVibration();
         break;
       }
