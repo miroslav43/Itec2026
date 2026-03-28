@@ -13,10 +13,14 @@ import '../widgets/user_count_badge.dart';
 
 class BattleCanvasScreen extends StatefulWidget {
   final String posterId;
+  final String? posterName;
+  final String? posterImageUrl;
   
   const BattleCanvasScreen({
     super.key,
     required this.posterId,
+    this.posterName,
+    this.posterImageUrl,
   });
 
   @override
@@ -93,6 +97,7 @@ class _BattleCanvasScreenState extends State<BattleCanvasScreen> {
     final appState = context.watch<AppStateProvider>();
     final socketProvider = context.watch<SocketProvider>();
     final poster = appState.posters[widget.posterId];
+    final displayName = widget.posterName ?? poster?.name ?? widget.posterId;
     
     return Scaffold(
       backgroundColor: AppTheme.darkBg,
@@ -106,6 +111,7 @@ class _BattleCanvasScreenState extends State<BattleCanvasScreen> {
               },
               child: DrawingCanvas(
                 posterId: widget.posterId,
+                posterImageUrl: widget.posterImageUrl,
                 onStrokeComplete: _handleStrokeComplete,
               ),
             ),
@@ -120,7 +126,7 @@ class _BattleCanvasScreenState extends State<BattleCanvasScreen> {
               child: AnimatedOpacity(
                 opacity: _showToolbar ? 1.0 : 0.3,
                 duration: const Duration(milliseconds: 200),
-                child: _buildTopBar(poster?.name ?? widget.posterId, socketProvider.isConnected),
+                child: _buildTopBar(displayName, socketProvider.isConnected),
               ),
             ),
           ),

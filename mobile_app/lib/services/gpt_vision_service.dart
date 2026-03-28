@@ -1,9 +1,9 @@
 import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
-import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:image/image.dart' as img_lib;
 
 class GptResult {
   final String? posterId;
@@ -18,10 +18,7 @@ class GptResult {
 }
 
 class GptVisionService {
-  static const _apiKey = String.fromEnvironment(
-    'OPENAI_API_KEY',
-    defaultValue: 'YOUR_OPENAI_API_KEY_HERE',
-  );
+  static const _apiKey = String.fromEnvironment('OPENAI_API_KEY');
   static const _openAiUrl = 'https://api.openai.com/v1/chat/completions';
 
   static const _basePrompt = '''
@@ -49,14 +46,27 @@ afis10: bright yellow background, large "<itec>" logo only
   // Server URL — should match SocketProvider's server URL
   static String serverUrl = 'http://10.27.252.100:3000';
 
+  // Prompt cache — refresh every 60 s
+  static String? _cachedPrompt;
+  static List<String>? _cachedValidIds;
+  static DateTime? _lastPromptFetch;
+
   // Fetch custom posters and build dynamic prompt
-  static Future<(String prompt, List<String> validIds)> _buildPrompt() async {
+  static Future<(String, List<String>)> _buildPrompt() async {
+    // Use cache if fresh (< 60 s)
+    final now = DateTime.now();
+    if (_cachedPrompt != null &&
+        _lastPromptFetch != null &&
+        now.difference(_lastPromptFetch!).inSeconds < 60) {
+      return (_cachedPrompt!, _cachedValidIds!);
+    }
+
     final ids = List<String>.from(_builtinIds);
     String extra = '';
     try {
       final resp = await http
           .get(Uri.parse('$serverUrl/api/custom-posters'))
-          .timeout(const Duration(seconds: 5));
+          .timeout(const Duration(seconds: 4));
       if (resp.statusCode == 200) {
         final list = jsonDecode(resp.body) as List<dynamic>;
         for (final p in list) {
@@ -70,33 +80,27 @@ afis10: bright yellow background, large "<itec>" logo only
     final prompt = extra.isEmpty
         ? _basePrompt
         : '$_basePrompt\nCustom posters:\n$extra';
+    _cachedPrompt = prompt;
+    _cachedValidIds = ids;
+    _lastPromptFetch = now;
     return (prompt, ids);
   }
 
-  // Crop center square of image and resize to 600×600 PNG
+  // Fast crop + resize using image package (JPEG output, much smaller/faster than PNG)
   static Future<Uint8List> cropCenterSquare(Uint8List jpegBytes) async {
-    final codec = await ui.instantiateImageCodec(jpegBytes);
-    final frame = await codec.getNextFrame();
-    final src = frame.image;
+    return compute(_cropResizeIsolate, jpegBytes);
+  }
 
+  static Uint8List _cropResizeIsolate(Uint8List bytes) {
+    final src = img_lib.decodeImage(bytes);
+    if (src == null) return bytes;
     final side = min(src.width, src.height);
-    final sx = ((src.width - side) / 2).round();
-    final sy = ((src.height - side) / 2).round();
-    const outSize = 600;
-
-    final recorder = ui.PictureRecorder();
-    final canvas = ui.Canvas(recorder);
-    canvas.drawImageRect(
-      src,
-      ui.Rect.fromLTWH(sx.toDouble(), sy.toDouble(), side.toDouble(), side.toDouble()),
-      ui.Rect.fromLTWH(0, 0, outSize.toDouble(), outSize.toDouble()),
-      ui.Paint(),
-    );
-    final picture = recorder.endRecording();
-    final img = await picture.toImage(outSize, outSize);
-    final pngBd = await img.toByteData(format: ui.ImageByteFormat.png);
-    if (pngBd != null) return pngBd.buffer.asUint8List();
-    return jpegBytes;
+    final x = (src.width - side) ~/ 2;
+    final y = (src.height - side) ~/ 2;
+    final cropped = img_lib.copyCrop(src, x: x, y: y, width: side, height: side);
+    final resized = img_lib.copyResize(cropped, width: 400, height: 400,
+        interpolation: img_lib.Interpolation.linear);
+    return img_lib.encodeJpg(resized, quality: 82);
   }
 
   // Save custom poster to backend, returns poster ID
@@ -158,7 +162,7 @@ afis10: bright yellow background, large "<itec>" logo only
                 {
                   'type': 'image_url',
                   'image_url': {
-                    'url': 'data:image/png;base64,$b64',
+                    'url': 'data:image/jpeg;base64,$b64',
                     'detail': 'low',
                   },
                 },

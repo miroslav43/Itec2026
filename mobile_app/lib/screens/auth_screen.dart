@@ -24,7 +24,9 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
   final _emailCtrl = TextEditingController();
   final _usernameCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
+  final _serverCtrl = TextEditingController(text: 'http://10.27.252.100:3000');
   bool _passwordVisible = false;
+  bool _showServerField = false;
 
   @override
   void initState() {
@@ -40,6 +42,7 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
     _emailCtrl.dispose();
     _usernameCtrl.dispose();
     _passwordCtrl.dispose();
+    _serverCtrl.dispose();
     super.dispose();
   }
 
@@ -69,7 +72,14 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
 
     try {
       final socketProvider = context.read<SocketProvider>();
-      AuthService.serverUrl = socketProvider.serverUrl;
+      // Use custom server URL if set
+      final customUrl = _serverCtrl.text.trim();
+      if (customUrl.isNotEmpty) {
+        AuthService.serverUrl = customUrl;
+        context.read<SocketProvider>().setServerUrl(customUrl);
+      } else {
+        AuthService.serverUrl = context.read<SocketProvider>().serverUrl;
+      }
 
       late final String token;
       late final AuthUser user;
@@ -182,6 +192,32 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
                                 onPressed: () => setState(() => _passwordVisible = !_passwordVisible),
                               ),
                             ),
+
+                            // Server URL toggle
+                            const SizedBox(height: 10),
+                            GestureDetector(
+                              onTap: () => setState(() => _showServerField = !_showServerField),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.settings_ethernet, size: 13, color: Colors.white38),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    _showServerField ? 'Ascunde IP server' : 'Schimbă IP server',
+                                    style: const TextStyle(color: Colors.white38, fontSize: 12),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (_showServerField) ...[
+                              const SizedBox(height: 8),
+                              _buildField(
+                                controller: _serverCtrl,
+                                label: 'Server URL',
+                                icon: Icons.dns_outlined,
+                                keyboardType: TextInputType.url,
+                              ),
+                            ],
 
                             // Error
                             if (_error != null) ...[

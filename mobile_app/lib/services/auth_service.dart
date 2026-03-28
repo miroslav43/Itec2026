@@ -57,15 +57,25 @@ class AuthService {
     required String username,
     required String password,
   }) async {
-    final resp = await http
-        .post(
-          Uri.parse('$serverUrl/api/auth/register'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({'email': email, 'username': username, 'password': password}),
-        )
-        .timeout(const Duration(seconds: 15));
+    final http.Response resp;
+    try {
+      resp = await http
+          .post(
+            Uri.parse('$serverUrl/api/auth/register'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'email': email, 'username': username, 'password': password}),
+          )
+          .timeout(const Duration(seconds: 15));
+    } on Exception {
+      throw 'Nu se poate conecta la server ($serverUrl). Verifică IP-ul.';
+    }
 
-    final body = jsonDecode(resp.body) as Map<String, dynamic>;
+    Map<String, dynamic> body;
+    try {
+      body = jsonDecode(resp.body) as Map<String, dynamic>;
+    } catch (_) {
+      throw 'Serverul a returnat un răspuns invalid. Asigură-te că serverul Node.js rulează pe $serverUrl';
+    }
     if (resp.statusCode != 200) throw body['error'] as String? ?? 'Register failed';
     return (token: body['token'] as String, user: AuthUser.fromJson(body['user'] as Map<String, dynamic>));
   }
@@ -74,15 +84,25 @@ class AuthService {
     required String email,
     required String password,
   }) async {
-    final resp = await http
-        .post(
-          Uri.parse('$serverUrl/api/auth/login'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({'email': email, 'password': password}),
-        )
-        .timeout(const Duration(seconds: 15));
+    final http.Response resp;
+    try {
+      resp = await http
+          .post(
+            Uri.parse('$serverUrl/api/auth/login'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'email': email, 'password': password}),
+          )
+          .timeout(const Duration(seconds: 15));
+    } on Exception {
+      throw 'Nu se poate conecta la server ($serverUrl). Verifică IP-ul.';
+    }
 
-    final body = jsonDecode(resp.body) as Map<String, dynamic>;
+    Map<String, dynamic> body;
+    try {
+      body = jsonDecode(resp.body) as Map<String, dynamic>;
+    } catch (_) {
+      throw 'Serverul a returnat un răspuns invalid. Asigură-te că serverul Node.js rulează pe $serverUrl';
+    }
     if (resp.statusCode != 200) throw body['error'] as String? ?? 'Login failed';
     return (token: body['token'] as String, user: AuthUser.fromJson(body['user'] as Map<String, dynamic>));
   }

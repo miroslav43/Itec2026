@@ -112,7 +112,11 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         AudioService.playPosterDetectedSound();
         await Future.delayed(const Duration(milliseconds: 800));
         if (mounted && _detectedPosterId != null) {
-          _openBattleCanvas(_detectedPosterId!);
+          final pid = _detectedPosterId!;
+          final imageUrl = pid.startsWith('custom_')
+              ? '${GptVisionService.serverUrl}/custom-posters/$pid.jpg'
+              : null;
+          _openBattleCanvas(pid, posterImageUrl: imageUrl);
         }
       } else if (result.looksLikePoster && result.posterId == null && mounted) {
         _showAddPosterDialog(result.croppedBytes);
@@ -218,7 +222,10 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                         if (!ctx.mounted) return;
                         Navigator.pop(ctx);
                         if (id != null && mounted) {
-                          _openBattleCanvas(id);
+                          final imageUrl =
+                              '${GptVisionService.serverUrl}/custom-posters/$id.jpg';
+                          _openBattleCanvas(id,
+                              posterName: name, posterImageUrl: imageUrl);
                         }
                       },
                 child: saving
@@ -239,16 +246,19 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     );
   }
   
-  void _openBattleCanvas(String posterId) {
+  void _openBattleCanvas(String posterId, {String? posterName, String? posterImageUrl}) {
     final appState = context.read<AppStateProvider>();
     appState.setCurrentPoster(posterId);
     
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (context) => BattleCanvasScreen(posterId: posterId),
+        builder: (context) => BattleCanvasScreen(
+          posterId: posterId,
+          posterName: posterName,
+          posterImageUrl: posterImageUrl,
+        ),
       ),
     ).then((_) {
-      // Reset detection when returning
       setState(() => _detectedPosterId = null);
       appState.reset();
     });

@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -9,7 +10,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { pool, initDB } = require('./db');
 
-const JWT_SECRET = 'itec_override_secret_2025';
+const JWT_SECRET = process.env.JWT_SECRET || 'itec_override_secret_2025';
 
 const app = express();
 app.use(cors());
@@ -540,8 +541,12 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 3000;
 
 async function startServer() {
-  await initDB();
-  await loadCustomPostersFromDB();
+  try {
+    await initDB();
+    await loadCustomPostersFromDB();
+  } catch (e) {
+    console.warn('DB init failed (continuing without DB):', e.message);
+  }
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`
 ╔════════════════════════════════════════════╗

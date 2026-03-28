@@ -57,9 +57,11 @@ mobile_app/ios/Runner/GeneratedPluginRegistrant*
 # Logs
 *.log
 
-# Environment
+# Environment — keep secrets local, never commit
 .env
 .env.local
+backend/.env
+mobile_app/.env
 
 # OS
 .DS_Store

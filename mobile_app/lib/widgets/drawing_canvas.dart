@@ -8,11 +8,13 @@ import '../theme/app_theme.dart';
 
 class DrawingCanvas extends StatefulWidget {
   final String posterId;
+  final String? posterImageUrl;
   final Function(Stroke)? onStrokeComplete;
   
   const DrawingCanvas({
     super.key,
     required this.posterId,
+    this.posterImageUrl,
     this.onStrokeComplete,
   });
 
@@ -45,12 +47,19 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
               children: [
                 // Dark background behind poster
                 Container(color: AppTheme.darkBg),
-                // Poster image - contain so full poster is visible
-                Image.asset(
-                  'assets/posters/${widget.posterId}.png',
-                  fit: BoxFit.contain,
-                  errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                ),
+                // Poster image — network for custom, asset for built-in
+                if (widget.posterImageUrl != null)
+                  Image.network(
+                    widget.posterImageUrl!,
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                  )
+                else
+                  Image.asset(
+                    'assets/posters/${widget.posterId}.png',
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                  ),
                 // Subtle grid overlay
                 CustomPaint(
                   painter: GridPainter(canvasSize: _canvasSize, gridSize: 20),
