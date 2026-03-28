@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import '../models/stroke_model.dart';
+import '../services/player_stats_service.dart';
 import '../theme/app_theme.dart';
 
 class DrawingProvider extends ChangeNotifier {
   // Drawing settings
   Color _currentColor = AppTheme.neonCyan;
-  double _brushSize = 8.0;
+  double _brushSize = PlayerStatsService.brushSizeForLevel;
   bool _isEraserMode = false;
   bool _isDrawing = false;
   
@@ -47,6 +48,11 @@ class DrawingProvider extends ChangeNotifier {
   
   void setBrushSize(double size) {
     _brushSize = size;
+    notifyListeners();
+  }
+
+  void syncBrushToLevel() {
+    _brushSize = PlayerStatsService.brushSizeForLevel;
     notifyListeners();
   }
   
@@ -125,7 +131,7 @@ class DrawingProvider extends ChangeNotifier {
   
   void reset() {
     _currentColor = AppTheme.neonCyan;
-    _brushSize = 8.0;
+    _brushSize = PlayerStatsService.brushSizeForLevel;
     _isEraserMode = false;
     _isDrawing = false;
     _currentPoints = [];

@@ -8,12 +8,14 @@ import 'screens/auth_screen.dart';
 import 'screens/camera_screen.dart';
 import 'services/auth_service.dart';
 import 'services/image_matching_service.dart';
+import 'services/player_stats_service.dart';
 import 'theme/app_theme.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   ImageMatchingService.initialize();
+  await PlayerStatsService.load();
 
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,

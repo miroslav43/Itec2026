@@ -9,6 +9,7 @@ import '../services/gpt_vision_service.dart';
 import '../services/haptic_service.dart';
 import '../services/audio_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/player_badge.dart';
 import '../widgets/poster_selector_dialog.dart';
 import '../widgets/team_selector.dart';
 import '../widgets/connection_status.dart';
@@ -89,12 +90,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     if (mounted) setState(() {});
 
     try {
-      // Zoom out to minimum for wider frame
-      try {
-        final minZoom = await _cameraController!.getMinZoomLevel();
-        await _cameraController!.setZoomLevel(minZoom);
-      } catch (_) {}
-
       final xFile = await _cameraController!.takePicture();
       final bytes = await xFile.readAsBytes();
 
@@ -116,7 +111,10 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
           final imageUrl = pid.startsWith('custom_')
               ? '${GptVisionService.serverUrl}/custom-posters/$pid.jpg'
               : null;
-          _openBattleCanvas(pid, posterImageUrl: imageUrl);
+          final customName = pid.startsWith('custom_')
+              ? GptVisionService.getPosterName(pid)
+              : null;
+          _openBattleCanvas(pid, posterName: customName, posterImageUrl: imageUrl);
         }
       } else if (result.looksLikePoster && result.posterId == null && mounted) {
         _showAddPosterDialog(result.croppedBytes);
@@ -394,6 +392,13 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
             child: SafeArea(
               child: _buildTopBar(),
             ),
+          ),
+
+          // Player badge — level + trophies
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 52,
+            left: 16,
+            child: const PlayerBadge(),
           ),
           
           // Detection indicator

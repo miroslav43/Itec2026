@@ -1,0 +1,46 @@
+Proba Mobile Development iTEC 2026
+Resurse iTEC 2026: https://itec.ro/resurse
+Închideți ochii pentru o secundă. Orașul este plin de ecrane care nu vă aparțin. Reclame
+plictisitoare, afișe electorale șterse și panouri comerciale care vă sufocă vizual. În mod
+normal, ești doar un spectator. Dar ce-ar fi dacă orice afiș de pe holurile facultății ar putea
+fi „captat” și transformat într-un canvas digital, unde tu și prietenii tai să vă luptați pentru
+teritoriu în timp real, lăsând în urmă graffiti-uri neon, GIF-uri psihedelice și mesaje audio?
+Bine ați venit la iTEC 2026.
+🌎 Contextul actual
+În 2026, tinerii nu mai vor doar să consume conținut, vor să-l creeze peste tot. Mobile
+development-ul nu mai înseamnă doar liste și butoane, ci Shared Reality. Avem nevoie
+de un sistem care să sincronizeze creativitatea a sute de utilizatori pe aceeași „platformă”,
+fără lag și fără discriminare tehnologică (să meargă și pe ultimul iPhone, și pe un telefon
+de acum 4 ani).
+👷 Ce aveți de construit
+Viziunea voastră este să creați iTEC: OVERRIDE, o platformă de „vandalism digital”
+colaborativ (Flutter, React Native, Swift sau Kotlin).
+Componente care ar fi recomandat să le implementați:
+• Frontend AR: Aplicația trebuie să identifice „Afișele-Ancoră” (amplasate prin
+locație). Odată scanate, afișele devin un canvas. Trebuie să puteți desena (graffiti),
+să plasați imagini sau GIF-uri care să rămână „lipite” de afiș indiferent de mișcarea
+camerei. (eventual cu mai multe tool-uri, ca pe https://paint.sumo.app/ )
+• Real-Time Sync: Puteți folosi WebSockets, ca orice pixel desenat sau orice
+sticker plasat de un utilizator să apară instantaneu pe telefoanele tuturor celorlalți
+care privesc același afiș.
+• Territory War Engine: Un backend (Node/Python/Go) care calculează cine
+„deține” afișul (echipa cu cea mai mare suprafață acoperită). Aplicația poate să
+aibă o hartă 2D care arată în timp real ce afișe au fost „cucerite”.
+• Audio Proximity Trigger: Posibilitatea de a atașa un fișier audio (un imn al
+echipei) de un afiș. Când un rival scanează afișul tău, sunetul pornește automat,
+semnalând că a intrat pe teritoriu inamic.
+👀 Side-quests
+Puteți implementa aceste funcționalități pentru bonus points:
+• AI Tag Generator: Puteți integra un API de Image Generation (ex: DALL-E sau
+NanoBanana) care să permită utilizatorului să scrie un prompt (ex: „cyberpunk
+wolf”) și să genereze un sticker unic pe care să-l lipească pe afiș.
+• Haptic Feedback: Puteți implementa vibrații diferite: una fină când desenezi tu și
+una agresivă (intermitentă) când cineva din altă echipă îți „șterge” desenul în timp
+real.
+• Glitch Animation: Adăugați un efect vizual de „glitch” (imagine care tremură sau
+se pixelizează) atunci când un afiș este modificat de mai multe echipe simultan.
+💥 Easter-eggs
+Puteți implementa și easter-eggs pentru bonus points.
+Fiți creativi!
+Focusați-vă pe o experiență cât mai colaborativă și distrați-vă.
+Baftă! ;14
