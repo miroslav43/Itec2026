@@ -18,6 +18,9 @@ class GptResult {
 }
 
 class GptVisionService {
+  /// Compile-time only. Run:
+  /// `flutter run --dart-define=OPENAI_API_KEY=sk-...`
+  /// Release: `flutter build ipa --dart-define=OPENAI_API_KEY=sk-...`
   static const _apiKey = String.fromEnvironment('OPENAI_API_KEY');
   static const _openAiUrl = 'https://api.openai.com/v1/chat/completions';
 
@@ -156,6 +159,14 @@ afis10: bright yellow background, large "<itec>" logo only
     }
 
     try {
+      if (_apiKey.isEmpty) {
+        debugPrint(
+          'GptVision: OPENAI_API_KEY is empty. Pass at build/run time, e.g. '
+          'flutter run --dart-define=OPENAI_API_KEY=sk-your-key',
+        );
+        return const GptResult(posterId: null, looksLikePoster: false);
+      }
+
       final (prompt, validIds) = await _buildPrompt();
       final b64 = base64Encode(cropped ?? jpegBytes);
       debugPrint('GptVision: sending ${((cropped ?? jpegBytes).length / 1024).toStringAsFixed(0)}KB');
