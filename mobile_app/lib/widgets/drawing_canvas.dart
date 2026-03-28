@@ -34,49 +34,85 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     return LayoutBuilder(
       builder: (context, constraints) {
         _canvasSize = Size(constraints.maxWidth, constraints.maxHeight);
-        
-        return GestureDetector(
-          onPanStart: (details) => _onPanStart(details, drawingProvider),
-          onPanUpdate: (details) => _onPanUpdate(details, drawingProvider),
-          onPanEnd: (details) => _onPanEnd(details, drawingProvider, appState),
-          child: SizedBox(
-            width: _canvasSize.width,
-            height: _canvasSize.height,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                // Dark background behind poster
-                Container(color: AppTheme.darkBg),
-                // Poster image — network for custom, asset for built-in
-                if (widget.posterImageUrl != null)
-                  Image.network(
-                    widget.posterImageUrl!,
-                    fit: BoxFit.contain,
-                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                  )
-                else
-                  Image.asset(
-                    'assets/posters/${widget.posterId}.png',
-                    fit: BoxFit.contain,
-                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                  ),
-                // Subtle grid overlay
-                CustomPaint(
-                  painter: GridPainter(canvasSize: _canvasSize, gridSize: 20),
+
+        return SizedBox(
+          width:  _canvasSize.width,
+          height: _canvasSize.height,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              // ── Background + poster + grid + strokes (drawing GD) ──────────
+              GestureDetector(
+                onPanStart:  (d) => _onPanStart(d, drawingProvider),
+                onPanUpdate: (d) => _onPanUpdate(d, drawingProvider),
+                onPanEnd:    (d) => _onPanEnd(d, drawingProvider, appState),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Container(color: AppTheme.darkBg),
+                    if (widget.posterImageUrl != null)
+                      Image.network(
+                        widget.posterImageUrl!,
+                        fit: BoxFit.contain,
+                        errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                      )
+                    else
+                      Image.asset(
+                        'assets/posters/${widget.posterId}.png',
+                        fit: BoxFit.contain,
+                        errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                      ),
+                    CustomPaint(
+                      painter:
+                          GridPainter(canvasSize: _canvasSize, gridSize: 20),
+                    ),
+                    CustomPaint(
+                      painter: CanvasPainter(
+                        strokes:       drawingProvider.localStrokes,
+                        currentPoints: drawingProvider.currentPoints,
+                        currentColor:  drawingProvider.currentColor,
+                        currentSize:   drawingProvider.brushSize,
+                        isEraserMode:  drawingProvider.isEraserMode,
+                        canvasSize:    _canvasSize,
+                      ),
+                    ),
+                  ],
                 ),
-                // Drawing strokes
-                CustomPaint(
-                  painter: CanvasPainter(
-                    strokes: drawingProvider.localStrokes,
-                    currentPoints: drawingProvider.currentPoints,
-                    currentColor: drawingProvider.currentColor,
-                    currentSize: drawingProvider.brushSize,
-                    isEraserMode: drawingProvider.isEraserMode,
-                    canvasSize: _canvasSize,
+              ),
+
+              // ── Sticker stamps (draggable, on top of strokes) ──────────────
+              ...drawingProvider.stamps.asMap().entries.map((entry) {
+                final index = entry.key;
+                final stamp = entry.value;
+                // Display at 64×64 px — 2× the 32×32 pixel-art size for
+                // comfortable dragging while keeping the crisp pixel look.
+                const displaySize = 64.0;
+
+                return Positioned(
+                  left: stamp.position.dx,
+                  top:  stamp.position.dy,
+                  child: GestureDetector(
+                    // opaque so this detector wins in the gesture arena
+                    // and the drawing GestureDetector below is not triggered.
+                    behavior: HitTestBehavior.opaque,
+                    onPanUpdate: (details) {
+                      drawingProvider.updateStampPosition(
+                        index,
+                        stamp.position + details.delta,
+                      );
+                    },
+                    child: Image.memory(
+                      stamp.bytes,
+                      width:         displaySize,
+                      height:        displaySize,
+                      // Nearest-neighbour preserves pixel-art crispness
+                      filterQuality: FilterQuality.none,
+                      fit:           BoxFit.contain,
+                    ),
                   ),
-                ),
-              ],
-            ),
+                );
+              }),
+            ],
           ),
         );
       },

@@ -1,8 +1,11 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import '../providers/drawing_provider.dart';
 import '../providers/socket_provider.dart';
+import '../screens/sticker_generator_screen.dart';
 import '../services/haptic_service.dart';
 import '../theme/app_theme.dart';
 
@@ -226,6 +229,33 @@ class DrawingToolbar extends StatelessWidget {
             ),
           ),
         ),
+
+        // Pixel-art sticker generator
+        GestureDetector(
+          onTap: () => _openStickerGenerator(context, provider),
+          child: Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: AppTheme.neonYellow.withOpacity(0.7),
+                width: 1,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: AppTheme.neonYellow.withOpacity(0.15),
+                  blurRadius: 8,
+                ),
+              ],
+            ),
+            child: Icon(
+              Icons.auto_awesome,
+              color: AppTheme.neonYellow.withOpacity(0.85),
+              size: 22,
+            ),
+          ),
+        ),
         
         // Clear (local only)
         GestureDetector(
@@ -254,6 +284,29 @@ class DrawingToolbar extends StatelessWidget {
     );
   }
   
+  Future<void> _openStickerGenerator(
+      BuildContext context, DrawingProvider provider) async {
+    HapticService.mediumImpact();
+
+    final result = await Navigator.push<Uint8List?>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const StickerGeneratorScreen(),
+        fullscreenDialog: true,
+      ),
+    );
+
+    if (result == null) return; // user dismissed without stamping
+
+    // Place stamp near the centre of the canvas with a slight random offset
+    // so multiple stamps don't pile on top of each other.
+    final screenSize = MediaQuery.sizeOf(context);
+    final cx = screenSize.width  * 0.35;
+    final cy = screenSize.height * 0.35;
+    provider.addStamp(result, Offset(cx, cy));
+    HapticService.heavyImpact();
+  }
+
   void _showColorPicker(BuildContext context, DrawingProvider provider) {
     Color pickerColor = provider.currentColor;
     
