@@ -62,6 +62,7 @@ mobile_app/ios/Runner/GeneratedPluginRegistrant*
 .env.local
 backend/.env
 mobile_app/.env
+mobile_app/.dart_env
 
 # OS
 .DS_Store

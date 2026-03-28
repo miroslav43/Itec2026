@@ -398,7 +398,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
           Positioned(
             top: MediaQuery.of(context).padding.top + 52,
             left: 16,
-            child: const PlayerBadge(),
+            child: PlayerBadge(),
           ),
           
           // Detection indicator

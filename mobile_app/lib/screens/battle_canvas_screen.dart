@@ -107,6 +107,7 @@ class _BattleCanvasScreenState extends State<BattleCanvasScreen> {
 
         // recordResult returns null if already counted (cooldown/session guard)
         final result = await PlayerStatsService.recordResult(isWinner, widget.posterId);
+        if (!mounted) return;
 
         setState(() {
           _won = isWinner;
@@ -122,6 +123,7 @@ class _BattleCanvasScreenState extends State<BattleCanvasScreen> {
           HapticService.loseVibration();
         }
         if (result?.leveledUp == true) {
+          context.read<DrawingProvider>().syncBrushToLevel();
           await Future.delayed(const Duration(milliseconds: 800));
           AudioService.playLevelUpSound();
           HapticService.levelUpVibration();
@@ -209,7 +211,7 @@ class _BattleCanvasScreenState extends State<BattleCanvasScreen> {
           Positioned(
             top: MediaQuery.of(context).padding.top + 16,
             left: 80,
-            child: const PlayerBadge(),
+            child: PlayerBadge(),
           ),
 
           // Win / Lose overlay
