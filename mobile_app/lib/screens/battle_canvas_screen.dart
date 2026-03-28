@@ -5,10 +5,13 @@ import '../providers/socket_provider.dart';
 import '../providers/drawing_provider.dart';
 import '../models/stroke_model.dart';
 import '../models/poster_model.dart';
+import '../services/audio_service.dart';
 import '../services/haptic_service.dart';
+import '../services/player_stats_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/drawing_canvas.dart';
 import '../widgets/drawing_toolbar.dart';
+import '../widgets/player_badge.dart';
 import '../widgets/user_count_badge.dart';
 
 class BattleCanvasScreen extends StatefulWidget {
@@ -30,6 +33,10 @@ class BattleCanvasScreen extends StatefulWidget {
 class _BattleCanvasScreenState extends State<BattleCanvasScreen> {
   bool _isJoined = false;
   bool _showToolbar = true;
+  bool _battleEnded = false;
+  bool _won = false;
+  int _xpGained = 0;
+  bool _leveledUp = false;
   
   @override
   void initState() {
@@ -45,10 +52,16 @@ class _BattleCanvasScreenState extends State<BattleCanvasScreen> {
     // Setup callbacks
     socketProvider.onStrokeReceived = (stroke) {
       drawingProvider.addRemoteStroke(stroke);
+      // Haptic + sound when enemy erases in real time
+      if (stroke.isEraser && stroke.teamId != appState.teamId) {
+        HapticService.enemyEraseVibration();
+        AudioService.playEnemyEraseSound();
+      }
     };
     
     socketProvider.onTerritoryUpdate = (territory) {
       appState.setTerritory(territory);
+      if (!_battleEnded) _checkWinCondition(territory, appState.teamId);
     };
     
     socketProvider.onUserCountChanged = (count) {
@@ -81,6 +94,49 @@ class _BattleCanvasScreenState extends State<BattleCanvasScreen> {
   void _handleStrokeComplete(Stroke stroke) {
     final socketProvider = context.read<SocketProvider>();
     socketProvider.sendStroke(stroke);
+    PlayerStatsService.recordStroke();
+    if (!stroke.isEraser) AudioService.playDrawStrokeSound();
+  }
+
+  Future<void> _checkWinCondition(Territory territory, String myTeamId) async {
+    for (final entry in territory.teams.entries) {
+      if (entry.value.percentage >= 80) {
+        // Mark battle ended immediately to stop re-triggers
+        setState(() => _battleEnded = true);
+        final isWinner = entry.key == myTeamId;
+
+        // recordResult returns null if already counted (cooldown/session guard)
+        final result = await PlayerStatsService.recordResult(isWinner, widget.posterId);
+
+        setState(() {
+          _won = isWinner;
+          _xpGained = result?.xpGained ?? 0;
+          _leveledUp = result?.leveledUp ?? false;
+        });
+
+        if (isWinner) {
+          AudioService.playWinSound();
+          HapticService.winVibration();
+        } else {
+          AudioService.playLoseSound();
+          HapticService.loseVibration();
+        }
+        if (result?.leveledUp == true) {
+          await Future.delayed(const Duration(milliseconds: 800));
+          AudioService.playLevelUpSound();
+          HapticService.levelUpVibration();
+        }
+        return;
+      }
+    }
+
+    // Warn player when enemy team is close to winning (≥60%)
+    for (final entry in territory.teams.entries) {
+      if (entry.key != myTeamId && entry.value.percentage >= 60) {
+        HapticService.enemyDominatingVibration();
+        break;
+      }
+    }
   }
   
   void _leaveRoom() {
@@ -148,6 +204,25 @@ class _BattleCanvasScreenState extends State<BattleCanvasScreen> {
             right: 16,
             child: UserCountBadge(count: appState.userCount),
           ),
+
+          // Player badge (level + trophies)
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 16,
+            left: 80,
+            child: const PlayerBadge(),
+          ),
+
+          // Win / Lose overlay
+          if (_battleEnded)
+            Positioned.fill(
+              child: _BattleResultOverlay(
+                won: _won,
+                xpGained: _xpGained,
+                leveledUp: _leveledUp,
+                newLevel: PlayerStatsService.level,
+                onClose: _leaveRoom,
+              ),
+            ),
           
           // Loading overlay
           if (!_isJoined)
@@ -301,6 +376,169 @@ class _BattleCanvasScreenState extends State<BattleCanvasScreen> {
     );
   }
 }
+
+// ── Win/Lose Overlay ─────────────────────────────────────────────────────────
+
+class _BattleResultOverlay extends StatefulWidget {
+  final bool won;
+  final int xpGained;
+  final bool leveledUp;
+  final int newLevel;
+  final VoidCallback onClose;
+
+  const _BattleResultOverlay({
+    required this.won,
+    required this.xpGained,
+    required this.leveledUp,
+    required this.newLevel,
+    required this.onClose,
+  });
+
+  @override
+  State<_BattleResultOverlay> createState() => _BattleResultOverlayState();
+}
+
+class _BattleResultOverlayState extends State<_BattleResultOverlay>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<double> _scale;
+  late Animation<double> _fade;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 600));
+    _scale = CurvedAnimation(parent: _ctrl, curve: Curves.elasticOut);
+    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeIn);
+    _ctrl.forward();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = widget.won ? AppTheme.neonGreen : AppTheme.neonRed;
+    final emoji = widget.won ? '🏆' : '💀';
+    final title = widget.won ? 'VICTORIE!' : 'ÎNFRÂNGERE';
+    final subtitle = widget.won
+        ? 'Ai cucerit 80% din afiș!'
+        : 'Inamicul a cucerit 80% din afiș.';
+
+    return FadeTransition(
+      opacity: _fade,
+      child: Container(
+        color: Colors.black.withOpacity(0.82),
+        child: Center(
+          child: ScaleTransition(
+            scale: _scale,
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 32),
+              padding: const EdgeInsets.all(28),
+              decoration: BoxDecoration(
+                color: AppTheme.darkBgSecondary,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: color, width: 2),
+                boxShadow: [BoxShadow(color: color.withOpacity(0.35), blurRadius: 30)],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(emoji, style: const TextStyle(fontSize: 56)),
+                  const SizedBox(height: 12),
+                  Text(
+                    title,
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 3,
+                      shadows: [Shadow(color: color, blurRadius: 12)],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(color: Colors.white60, fontSize: 14),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 20),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: AppTheme.neonYellow.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppTheme.neonYellow.withOpacity(0.4)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.bolt, color: AppTheme.neonYellow, size: 20),
+                        const SizedBox(width: 6),
+                        Text(
+                          '+${widget.xpGained} XP',
+                          style: const TextStyle(
+                            color: AppTheme.neonYellow,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (widget.leveledUp) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: AppTheme.neonCyan.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: AppTheme.neonCyan.withOpacity(0.5)),
+                      ),
+                      child: Text(
+                        '⬆ LEVEL UP → LVL ${widget.newLevel}!',
+                        style: const TextStyle(
+                          color: AppTheme.neonCyan,
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 1,
+                        ),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 24),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: color.withOpacity(0.2),
+                        foregroundColor: color,
+                        side: BorderSide(color: color),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
+                      onPressed: widget.onClose,
+                      child: const Text(
+                        'ÎNAPOI',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 2),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Live Score Bar ────────────────────────────────────────────────────────────
 
 class _LiveScoreBar extends StatelessWidget {
   final Territory? territory;

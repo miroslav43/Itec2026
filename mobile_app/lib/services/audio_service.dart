@@ -60,6 +60,56 @@ class AudioService {
     }
   }
   
+  // Play draw stroke sound (short, soft)
+  static Future<void> playDrawStrokeSound() async {
+    if (!_soundEnabled) return;
+    try {
+      await _player.play(AssetSource('sounds/draw_stroke.mp3'));
+    } catch (e) {
+      debugPrint('Error playing draw stroke sound: $e');
+    }
+  }
+
+  // Play enemy erase sound
+  static Future<void> playEnemyEraseSound() async {
+    if (!_soundEnabled) return;
+    try {
+      await _player.play(AssetSource('sounds/enemy_erase.wav'));
+    } catch (e) {
+      debugPrint('Error playing enemy erase sound: $e');
+    }
+  }
+
+  // Play level up sound
+  static Future<void> playLevelUpSound() async {
+    if (!_soundEnabled) return;
+    try {
+      await _player.play(AssetSource('sounds/level_up.mp3'));
+    } catch (e) {
+      debugPrint('Error playing level up sound: $e');
+    }
+  }
+
+  // Play win sound
+  static Future<void> playWinSound() async {
+    if (!_soundEnabled) return;
+    try {
+      await _player.play(AssetSource('sounds/win.mp3'));
+    } catch (e) {
+      debugPrint('Error playing win sound: $e');
+    }
+  }
+
+  // Play lose sound
+  static Future<void> playLoseSound() async {
+    if (!_soundEnabled) return;
+    try {
+      await _player.play(AssetSource('sounds/lose.mp3'));
+    } catch (e) {
+      debugPrint('Error playing lose sound: $e');
+    }
+  }
+
   static void dispose() {
     _player.dispose();
   }

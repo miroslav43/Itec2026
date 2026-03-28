@@ -7,6 +7,7 @@ import '../providers/drawing_provider.dart';
 import '../providers/socket_provider.dart';
 import '../screens/sticker_generator_screen.dart';
 import '../services/haptic_service.dart';
+import '../services/player_stats_service.dart';
 import '../theme/app_theme.dart';
 
 class DrawingToolbar extends StatelessWidget {
@@ -29,9 +30,9 @@ class DrawingToolbar extends StatelessWidget {
           // Color palette
           _buildColorPalette(context, drawingProvider),
           const SizedBox(height: 12),
-          
-          // Brush size slider
-          _buildBrushSizeSelector(context, drawingProvider),
+
+          // Level + brush size indicator (replaces slider)
+          _buildLevelIndicator(drawingProvider),
           const SizedBox(height: 12),
           
           // Tool buttons
@@ -108,48 +109,44 @@ class DrawingToolbar extends StatelessWidget {
     );
   }
   
-  Widget _buildBrushSizeSelector(BuildContext context, DrawingProvider provider) {
+  Widget _buildLevelIndicator(DrawingProvider provider) {
+    final level = PlayerStatsService.level;
+    final brushSize = PlayerStatsService.brushSizeForLevel;
+    final progress = PlayerStatsService.levelProgress;
     return Row(
       children: [
-        Icon(
-          Icons.brush,
-          color: AppTheme.neonCyan.withOpacity(0.7),
-          size: 20,
+        Icon(Icons.bolt, color: AppTheme.neonYellow, size: 18),
+        const SizedBox(width: 4),
+        Text(
+          'LVL $level',
+          style: const TextStyle(
+            color: AppTheme.neonYellow,
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1,
+          ),
         ),
         const SizedBox(width: 8),
         Expanded(
-          child: SliderTheme(
-            data: SliderThemeData(
-              activeTrackColor: AppTheme.neonCyan,
-              inactiveTrackColor: AppTheme.neonCyan.withOpacity(0.2),
-              thumbColor: AppTheme.neonCyan,
-              overlayColor: AppTheme.neonCyan.withOpacity(0.2),
-              trackHeight: 4,
-              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
-            ),
-            child: Slider(
-              value: provider.brushSize,
-              min: 2,
-              max: 40,
-              onChanged: (value) {
-                provider.setBrushSize(value);
-              },
-              onChangeEnd: (_) {
-                HapticService.selectionClick();
-              },
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: progress,
+              backgroundColor: AppTheme.neonYellow.withOpacity(0.15),
+              valueColor: AlwaysStoppedAnimation<Color>(AppTheme.neonYellow),
+              minHeight: 6,
             ),
           ),
         ),
-        Container(
-          width: 40,
-          alignment: Alignment.center,
-          child: Text(
-            '${provider.brushSize.round()}',
-            style: const TextStyle(
-              color: AppTheme.neonCyan,
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-            ),
+        const SizedBox(width: 8),
+        Icon(Icons.brush, color: AppTheme.neonCyan.withOpacity(0.7), size: 16),
+        const SizedBox(width: 4),
+        Text(
+          '${brushSize.round()}px',
+          style: TextStyle(
+            color: AppTheme.neonCyan.withOpacity(0.9),
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
           ),
         ),
       ],
@@ -160,45 +157,6 @@ class DrawingToolbar extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
-        // Brush sizes
-        ...provider.brushSizes.map((size) {
-          final isSelected = provider.brushSize == size;
-          return GestureDetector(
-            onTap: () {
-              HapticService.selectionClick();
-              provider.setBrushSize(size);
-            },
-            child: Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: isSelected 
-                    ? AppTheme.neonCyan.withOpacity(0.3)
-                    : Colors.transparent,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: isSelected 
-                      ? AppTheme.neonCyan 
-                      : AppTheme.neonCyan.withOpacity(0.3),
-                  width: 1,
-                ),
-              ),
-              child: Center(
-                child: Container(
-                  width: size / 2 + 4,
-                  height: size / 2 + 4,
-                  decoration: BoxDecoration(
-                    color: isSelected ? AppTheme.neonCyan : Colors.white54,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              ),
-            ),
-          );
-        }),
-        
-        const SizedBox(width: 8),
-        
         // Eraser
         GestureDetector(
           onTap: () {

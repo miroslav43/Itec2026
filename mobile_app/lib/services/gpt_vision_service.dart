@@ -50,6 +50,9 @@ afis10: bright yellow background, large "<itec>" logo only
   static String? _cachedPrompt;
   static List<String>? _cachedValidIds;
   static DateTime? _lastPromptFetch;
+  static final Map<String, String> _posterNames = {}; // id -> display name
+
+  static String? getPosterName(String id) => _posterNames[id];
 
   // Fetch custom posters and build dynamic prompt
   static Future<(String, List<String>)> _buildPrompt() async {
@@ -71,8 +74,10 @@ afis10: bright yellow background, large "<itec>" logo only
         final list = jsonDecode(resp.body) as List<dynamic>;
         for (final p in list) {
           final id = p['id'] as String;
-          final desc = p['description'] as String? ?? p['name'] as String;
+          final name = p['name'] as String? ?? id;
+          final desc = p['description'] as String? ?? name;
           ids.add(id);
+          _posterNames[id] = name;
           extra += '$id: $desc\n';
         }
       }
@@ -124,7 +129,16 @@ afis10: bright yellow background, large "<itec>" logo only
           .timeout(const Duration(seconds: 15));
       if (resp.statusCode == 200) {
         final body = jsonDecode(resp.body) as Map<String, dynamic>;
-        return body['id'] as String?;
+        final id = body['id'] as String?;
+        if (id != null) {
+          // Immediately register in local cache so next scan recognises it
+          _posterNames[id] = name;
+          _cachedValidIds?.add(id);
+          // Invalidate prompt cache so it's rebuilt with the new poster
+          _cachedPrompt = null;
+          _lastPromptFetch = null;
+        }
+        return id;
       }
       debugPrint('SaveCustomPoster HTTP ${resp.statusCode}: ${resp.body}');
     } catch (e) {
