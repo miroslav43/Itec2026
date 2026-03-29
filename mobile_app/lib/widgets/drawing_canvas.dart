@@ -32,6 +32,7 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   Size _canvasSize = Size.zero;
   int _hapticCounter = 0;
   final Map<String, ui.Image> _stickerImageCache = {};
+  final Set<String> _loadingStarted = {};
 
   @override
   void dispose() {
@@ -94,9 +95,13 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
             ),
             // Placed stickers (non-interactive display layer)
             ...drawingProvider.placedStickers.map((ps) {
-              _loadStickerImage(ps.uid, ps.imageBytes).then((_) {
-                if (mounted) setState(() {});
-              });
+              if (!_stickerImageCache.containsKey(ps.uid) &&
+                  !_loadingStarted.contains(ps.uid)) {
+                _loadingStarted.add(ps.uid);
+                _loadStickerImage(ps.uid, ps.imageBytes).then((_) {
+                  if (mounted) setState(() {});
+                });
+              }
               final cachedImg = _stickerImageCache[ps.uid];
               if (cachedImg == null) return const SizedBox.shrink();
               final stickerSize = 80.0 * ps.scale;

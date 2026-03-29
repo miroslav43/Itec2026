@@ -1,8 +1,10 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../models/sticker_model.dart';
+import '../providers/socket_provider.dart';
 import '../services/ai_image_service.dart';
 import '../theme/app_theme.dart';
 
@@ -41,7 +43,8 @@ class _StickerGeneratorScreenState extends State<StickerGeneratorScreen>
 
   Future<void> _loadLibrary() async {
     setState(() => _loadingLib = true);
-    final list = await AiImageService.fetchStickers();
+    final serverUrl = context.read<SocketProvider>().serverUrl;
+    final list = await AiImageService.fetchStickers(serverUrl: serverUrl);
     if (mounted) setState(() { _library = list; _loadingLib = false; });
   }
 
@@ -49,7 +52,8 @@ class _StickerGeneratorScreenState extends State<StickerGeneratorScreen>
     final prompt = _promptCtrl.text.trim();
     if (prompt.isEmpty) return;
     setState(() { _generating = true; _errorMsg = null; _generated = null; });
-    final result = await AiImageService.generateSticker(prompt: prompt);
+    final serverUrl = context.read<SocketProvider>().serverUrl;
+    final result = await AiImageService.generateSticker(prompt: prompt, serverUrl: serverUrl);
     if (!mounted) return;
     if (result == null) {
       setState(() { _generating = false; _errorMsg = 'Generarea a eșuat. Verifică conexiunea.'; });

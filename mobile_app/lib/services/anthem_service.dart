@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
@@ -7,7 +9,16 @@ import 'package:path_provider/path_provider.dart';
 class AnthemService {
   static final AnthemService _instance = AnthemService._internal();
   factory AnthemService() => _instance;
-  AnthemService._internal();
+
+  StreamSubscription? _completeSub;
+
+  AnthemService._internal() {
+    _completeSub = _player.onPlayerComplete.listen((_) {
+      if (_completeSub == null) return; // disposed
+      _isPlaying = false;
+      _currentTeamId = null;
+    });
+  }
 
   final AudioPlayer _player = AudioPlayer();
   String? _currentTeamId;
@@ -50,8 +61,8 @@ class AnthemService {
           .get(Uri.parse('$serverUrl/api/anthem/$teamId/exists'))
           .timeout(const Duration(seconds: 4));
       if (resp.statusCode == 200) {
-        final body = resp.body;
-        return body.contains('"exists":true');
+        final json = jsonDecode(resp.body) as Map<String, dynamic>;
+        return json['exists'] == true;
       }
     } catch (_) {}
     return false;
@@ -84,10 +95,6 @@ class AnthemService {
       _currentTeamId = enemyTeamId;
       _isPlaying = true;
       await _player.play(DeviceFileSource(file.path));
-      _player.onPlayerComplete.listen((_) {
-        _isPlaying = false;
-        _currentTeamId = null;
-      });
       debugPrint('[Anthem] Playing anthem for team $enemyTeamId');
     } catch (e) {
       debugPrint('[Anthem] playAnthem error: $e');
@@ -105,6 +112,8 @@ class AnthemService {
   }
 
   void dispose() {
+    _completeSub?.cancel();
+    _completeSub = null;
     _player.dispose();
   }
 }

@@ -76,10 +76,11 @@ class ArPosterCoordinator: NSObject, ARSCNViewDelegate, ARSessionDelegate, Flutt
         switch call.method {
         case "initialize":
             guard let args = call.arguments as? [String: Any],
-                  let rawImages = args["images"] as? [String: FlutterStandardTypedData],
-                  let widths = args["widths"] as? [String: Double]
+                  let posterIds = args["posterIds"] as? [String]
             else { result(nil); return }
-            setupARKit(rawImages: rawImages, widths: widths)
+            let widths = args["widths"] as? [String: Double] ?? [:]
+            let texturePaths = args["texturePaths"] as? [String: String] ?? [:]
+            setupARKit(posterIds: posterIds, widths: widths, texturePaths: texturePaths)
             result(nil)
         case "dispose":
             arView?.session.pause()
@@ -89,14 +90,25 @@ class ArPosterCoordinator: NSObject, ARSCNViewDelegate, ARSessionDelegate, Flutt
         }
     }
 
-    private func setupARKit(rawImages: [String: FlutterStandardTypedData], widths: [String: Double]) {
+    private func setupARKit(posterIds: [String], widths: [String: Double], texturePaths: [String: String]) {
         var refImages = Set<ARReferenceImage>()
-        for (name, typedData) in rawImages {
-            guard let uiImage = UIImage(data: typedData.data),
-                  let cgImage = uiImage.cgImage else { continue }
-            let physW = CGFloat(widths[name] ?? 0.3)
+        for id in posterIds {
+            var uiImage: UIImage?
+            if let filePath = texturePaths[id] {
+                uiImage = UIImage(contentsOfFile: filePath)
+            } else {
+                // Load from Flutter assets bundle (flutter_assets/assets/posters/<id>.png)
+                let assetKey = "flutter_assets/assets/posters/\(id)"
+                if let path = Bundle.main.path(forResource: assetKey, ofType: "png") {
+                    uiImage = UIImage(contentsOfFile: path)
+                } else {
+                    print("[ArPosterPlugin] Asset not found in bundle: \(assetKey).png — skipping \(id)")
+                }
+            }
+            guard let image = uiImage, let cgImage = image.cgImage else { continue }
+            let physW = CGFloat(widths[id] ?? 0.3)
             let ref = ARReferenceImage(cgImage, orientation: .up, physicalWidth: physW)
-            ref.name = name
+            ref.name = id
             refImages.insert(ref)
         }
         let config = ARImageTrackingConfiguration()

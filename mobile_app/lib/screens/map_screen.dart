@@ -168,7 +168,7 @@ button[slot^="hotspot-"][data-conquered="1"] { display:block !important; }
       context.read<AppStateProvider>().addListener(_onTerritoryChanged);
       // poll territory from backend every 30s
       _pollTimer = Timer.periodic(
-        const Duration(seconds: 1),
+        const Duration(seconds: 30),
         (_) => _pollTerritoryFromBackend(),
       );
       _pollTerritoryFromBackend();

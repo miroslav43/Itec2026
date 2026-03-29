@@ -195,7 +195,7 @@ afis10: bright yellow background, large "<itec>" logo only
         content.add({'type': 'text', 'text': 'Reference image for ${p['id']} (${p['name']}):'}); 
         content.add({'type': 'image_url', 'image_url': {'url': 'data:image/jpeg;base64,${p['b64']}', 'detail': 'low'}});
       }
-      content.add({'type': 'text', 'text': 'Identify the scanned poster below. Reply with ONLY the poster ID or "unknown":'}); 
+      content.add({'type': 'text', 'text': 'Identify the scanned poster below. Reply with ONLY the poster ID, "unknown", or "not_a_poster":'}); 
       content.add({'type': 'image_url', 'image_url': {'url': 'data:image/jpeg;base64,$b64', 'detail': 'low'}});
 
       http.Response? response;

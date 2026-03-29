@@ -6,7 +6,6 @@ import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
 
 import '../models/sticker_model.dart';
-import 'gpt_vision_service.dart';
 
 class AiImageService {
   static const _apiKey = String.fromEnvironment('OPENAI_API_KEY');
@@ -15,6 +14,7 @@ class AiImageService {
   /// Generate a sticker via DALL-E 2, save to backend, return StickerItem.
   static Future<StickerItem?> generateSticker({
     required String prompt,
+    required String serverUrl,
     String? creatorId,
   }) async {
     try {
@@ -54,7 +54,7 @@ class AiImageService {
       );
 
       // 3. Persist to backend
-      await _saveToBackend(sticker);
+      await _saveToBackend(sticker, serverUrl);
 
       return sticker;
     } catch (e) {
@@ -63,9 +63,8 @@ class AiImageService {
     }
   }
 
-  static Future<void> _saveToBackend(StickerItem sticker) async {
+  static Future<void> _saveToBackend(StickerItem sticker, String serverUrl) async {
     try {
-      final serverUrl = GptVisionService.serverUrl;
       await http.post(
         Uri.parse('$serverUrl/api/stickers'),
         headers: {'Content-Type': 'application/json'},
@@ -82,9 +81,8 @@ class AiImageService {
   }
 
   /// Fetch all stickers from backend.
-  static Future<List<StickerItem>> fetchStickers() async {
+  static Future<List<StickerItem>> fetchStickers({required String serverUrl}) async {
     try {
-      final serverUrl = GptVisionService.serverUrl;
       final resp = await http
           .get(Uri.parse('$serverUrl/api/stickers'))
           .timeout(const Duration(seconds: 8));
