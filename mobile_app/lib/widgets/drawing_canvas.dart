@@ -1,8 +1,12 @@
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_state_provider.dart';
 import '../providers/drawing_provider.dart';
 import '../models/stroke_model.dart';
+import '../models/sticker_model.dart';
 import '../services/haptic_service.dart';
 import '../theme/app_theme.dart';
 
@@ -10,12 +14,14 @@ class DrawingCanvas extends StatefulWidget {
   final String posterId;
   final String? posterImageUrl;
   final Function(Stroke)? onStrokeComplete;
-  
+  final GlobalKey? repaintKey;
+
   const DrawingCanvas({
     super.key,
     required this.posterId,
     this.posterImageUrl,
     this.onStrokeComplete,
+    this.repaintKey,
   });
 
   @override
@@ -25,6 +31,25 @@ class DrawingCanvas extends StatefulWidget {
 class _DrawingCanvasState extends State<DrawingCanvas> {
   Size _canvasSize = Size.zero;
   int _hapticCounter = 0;
+  final Map<String, ui.Image> _stickerImageCache = {};
+  final Set<String> _loadingStarted = {};
+
+  @override
+  void dispose() {
+    for (final img in _stickerImageCache.values) img.dispose();
+    super.dispose();
+  }
+
+  Future<ui.Image?> _loadStickerImage(String uid, Uint8List bytes) async {
+    if (_stickerImageCache.containsKey(uid)) return _stickerImageCache[uid];
+    try {
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      final img = frame.image;
+      _stickerImageCache[uid] = img;
+      return img;
+    } catch (_) { return null; }
+  }
   
   @override
   Widget build(BuildContext context) {
@@ -34,85 +59,76 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     return LayoutBuilder(
       builder: (context, constraints) {
         _canvasSize = Size(constraints.maxWidth, constraints.maxHeight);
-
-        return SizedBox(
-          width:  _canvasSize.width,
-          height: _canvasSize.height,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              // ── Background + poster + grid + strokes (drawing GD) ──────────
-              GestureDetector(
-                onPanStart:  (d) => _onPanStart(d, drawingProvider),
-                onPanUpdate: (d) => _onPanUpdate(d, drawingProvider),
-                onPanEnd:    (d) => _onPanEnd(d, drawingProvider, appState),
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    Container(color: AppTheme.darkBg),
-                    if (widget.posterImageUrl != null)
-                      Image.network(
-                        widget.posterImageUrl!,
-                        fit: BoxFit.contain,
-                        errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                      )
-                    else
-                      Image.asset(
-                        'assets/posters/${widget.posterId}.png',
-                        fit: BoxFit.contain,
-                        errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                      ),
-                    CustomPaint(
-                      painter:
-                          GridPainter(canvasSize: _canvasSize, gridSize: 20),
-                    ),
-                    CustomPaint(
-                      painter: CanvasPainter(
-                        strokes:       drawingProvider.localStrokes,
-                        currentPoints: drawingProvider.currentPoints,
-                        currentColor:  drawingProvider.currentColor,
-                        currentSize:   drawingProvider.brushSize,
-                        isEraserMode:  drawingProvider.isEraserMode,
-                        canvasSize:    _canvasSize,
-                      ),
-                    ),
-                  ],
-                ),
+        
+        final renderStack = Stack(
+          fit: StackFit.expand,
+          children: [
+            // Dark background behind poster
+            Container(color: AppTheme.darkBg),
+            // Poster image — network for custom, asset for built-in
+            if (widget.posterImageUrl != null)
+              Image.network(
+                widget.posterImageUrl!,
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+              )
+            else
+              Image.asset(
+                'assets/posters/${widget.posterId}.png',
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
               ),
-
-              // ── Sticker stamps (draggable, on top of strokes) ──────────────
-              ...drawingProvider.stamps.asMap().entries.map((entry) {
-                final index = entry.key;
-                final stamp = entry.value;
-                // Display at 64×64 px — 2× the 32×32 pixel-art size for
-                // comfortable dragging while keeping the crisp pixel look.
-                const displaySize = 64.0;
-
-                return Positioned(
-                  left: stamp.position.dx,
-                  top:  stamp.position.dy,
-                  child: GestureDetector(
-                    // opaque so this detector wins in the gesture arena
-                    // and the drawing GestureDetector below is not triggered.
-                    behavior: HitTestBehavior.opaque,
-                    onPanUpdate: (details) {
-                      drawingProvider.updateStampPosition(
-                        index,
-                        stamp.position + details.delta,
-                      );
-                    },
-                    child: Image.memory(
-                      stamp.bytes,
-                      width:         displaySize,
-                      height:        displaySize,
-                      // Nearest-neighbour preserves pixel-art crispness
-                      filterQuality: FilterQuality.none,
-                      fit:           BoxFit.contain,
-                    ),
+            // Subtle grid overlay
+            CustomPaint(
+              painter: GridPainter(canvasSize: _canvasSize, gridSize: 20),
+            ),
+            // Drawing strokes
+            CustomPaint(
+              painter: CanvasPainter(
+                strokes: drawingProvider.localStrokes,
+                currentPoints: drawingProvider.currentPoints,
+                currentColor: drawingProvider.currentColor,
+                currentSize: drawingProvider.brushSize,
+                isEraserMode: drawingProvider.isEraserMode,
+                canvasSize: _canvasSize,
+              ),
+            ),
+            // Placed stickers (non-interactive display layer)
+            ...drawingProvider.placedStickers.map((ps) {
+              if (!_stickerImageCache.containsKey(ps.uid) &&
+                  !_loadingStarted.contains(ps.uid)) {
+                _loadingStarted.add(ps.uid);
+                _loadStickerImage(ps.uid, ps.imageBytes).then((_) {
+                  if (mounted) setState(() {});
+                });
+              }
+              final cachedImg = _stickerImageCache[ps.uid];
+              if (cachedImg == null) return const SizedBox.shrink();
+              final stickerSize = 80.0 * ps.scale;
+              return Positioned(
+                left: ps.x * _canvasSize.width - stickerSize / 2,
+                top:  ps.y * _canvasSize.height - stickerSize / 2,
+                child: IgnorePointer(
+                  child: SizedBox(
+                    width: stickerSize, height: stickerSize,
+                    child: RawImage(image: cachedImg, fit: BoxFit.contain),
                   ),
-                );
-              }),
-            ],
+                ),
+              );
+            }),
+          ],
+        );
+
+        return GestureDetector(
+          onPanStart: (details) => _onPanStart(details, drawingProvider),
+          onPanUpdate: (details) => _onPanUpdate(details, drawingProvider),
+          onPanEnd: (details) => _onPanEnd(details, drawingProvider, appState),
+          child: SizedBox(
+            width: _canvasSize.width,
+            height: _canvasSize.height,
+            child: widget.repaintKey != null
+                ? RepaintBoundary(key: widget.repaintKey, child: renderStack)
+                : renderStack,
           ),
         );
       },

@@ -25,8 +25,11 @@ class GptVisionService {
   static const _openAiUrl = 'https://api.openai.com/v1/chat/completions';
 
   static const _basePrompt = '''
-You are identifying which iTEC poster is shown in the image.
-Reply with ONLY the poster ID or "unknown". No other text.
+You are identifying printed flat materials in images.
+Reply with ONLY one of these — no other text:
+- The exact poster ID if you recognise it (e.g. "afis1", "custom_1")
+- "unknown" if the image shows ANY flat printed material (poster, flyer, advertisement, badge, ID card, sticker, leaflet, sign, card, label, paper with print) but you do not recognise which one
+- "not_a_poster" ONLY if the image clearly shows something that is NOT printed/flat material at all (e.g. a person's face/body, floor, ceiling, food, hand, generic wall without print, outdoor scenery, object)
 
 Known posters:
 afis1: blue background, "BOOST YOUR SOCIAL PRESENCE", social media icons (Facebook, Instagram)
@@ -54,44 +57,66 @@ afis10: bright yellow background, large "<itec>" logo only
   static List<String>? _cachedValidIds;
   static DateTime? _lastPromptFetch;
   static final Map<String, String> _posterNames = {}; // id -> display name
+  static final Map<String, String> _cachedPosterImages = {}; // id -> base64 jpeg
 
   static String? getPosterName(String id) => _posterNames[id];
 
-  // Fetch custom posters and build dynamic prompt
-  static Future<(String, List<String>)> _buildPrompt() async {
-    // Use cache if fresh (< 60 s)
+  // Fetch custom posters list + images, returns (promptText, validIds, customImages)
+  static Future<(String, List<String>, List<Map<String, String>>)> _buildData() async {
     final now = DateTime.now();
-    if (_cachedPrompt != null &&
-        _lastPromptFetch != null &&
-        now.difference(_lastPromptFetch!).inSeconds < 60) {
-      return (_cachedPrompt!, _cachedValidIds!);
+    final cacheStale = _cachedPrompt == null ||
+        _lastPromptFetch == null ||
+        now.difference(_lastPromptFetch!).inSeconds >= 60;
+
+    if (cacheStale) {
+      final ids = List<String>.from(_builtinIds);
+      String extra = '';
+      try {
+        final resp = await http
+            .get(Uri.parse('$serverUrl/api/custom-posters'))
+            .timeout(const Duration(seconds: 4));
+        if (resp.statusCode == 200) {
+          final list = jsonDecode(resp.body) as List<dynamic>;
+          for (final p in list) {
+            final id = p['id'] as String;
+            final name = p['name'] as String? ?? id;
+            ids.add(id);
+            _posterNames[id] = name;
+            extra += '$id: $name\n';
+          }
+        }
+      } catch (_) {}
+      _cachedPrompt = extra.isEmpty
+          ? _basePrompt
+          : '$_basePrompt\nCustom posters:\n$extra';
+      _cachedValidIds = ids;
+      _lastPromptFetch = now;
     }
 
-    final ids = List<String>.from(_builtinIds);
-    String extra = '';
-    try {
-      final resp = await http
-          .get(Uri.parse('$serverUrl/api/custom-posters'))
-          .timeout(const Duration(seconds: 4));
-      if (resp.statusCode == 200) {
-        final list = jsonDecode(resp.body) as List<dynamic>;
-        for (final p in list) {
-          final id = p['id'] as String;
-          final name = p['name'] as String? ?? id;
-          final desc = p['description'] as String? ?? name;
-          ids.add(id);
-          _posterNames[id] = name;
-          extra += '$id: $desc\n';
-        }
+    // Fetch images for custom poster IDs not yet cached
+    final customIds = _cachedValidIds!.where((id) => id.startsWith('custom_')).toList();
+    for (final id in customIds) {
+      if (!_cachedPosterImages.containsKey(id)) {
+        try {
+          final imgResp = await http
+              .get(Uri.parse('$serverUrl/custom-posters/$id.jpg'))
+              .timeout(const Duration(seconds: 4));
+          if (imgResp.statusCode == 200) {
+            _cachedPosterImages[id] = base64Encode(imgResp.bodyBytes);
+          }
+        } catch (_) {}
       }
-    } catch (_) {}
-    final prompt = extra.isEmpty
-        ? _basePrompt
-        : '$_basePrompt\nCustom posters:\n$extra';
-    _cachedPrompt = prompt;
-    _cachedValidIds = ids;
-    _lastPromptFetch = now;
-    return (prompt, ids);
+    }
+
+    final customImages = <Map<String, String>>[];
+    for (final id in customIds) {
+      final b64 = _cachedPosterImages[id];
+      if (b64 != null) {
+        customImages.add({'id': id, 'name': _posterNames[id] ?? id, 'b64': b64});
+      }
+    }
+
+    return (_cachedPrompt!, _cachedValidIds!, customImages);
   }
 
   // Fast crop + resize using image package (JPEG output, much smaller/faster than PNG)
@@ -134,12 +159,11 @@ afis10: bright yellow background, large "<itec>" logo only
         final body = jsonDecode(resp.body) as Map<String, dynamic>;
         final id = body['id'] as String?;
         if (id != null) {
-          // Immediately register in local cache so next scan recognises it
           _posterNames[id] = name;
           _cachedValidIds?.add(id);
-          // Invalidate prompt cache so it's rebuilt with the new poster
           _cachedPrompt = null;
           _lastPromptFetch = null;
+          _cachedPosterImages.remove(id); // will be fetched fresh on next scan
         }
         return id;
       }
@@ -159,44 +183,47 @@ afis10: bright yellow background, large "<itec>" logo only
     }
 
     try {
-      if (_apiKey.isEmpty) {
-        debugPrint(
-          'GptVision: OPENAI_API_KEY is empty. Pass at build/run time, e.g. '
-          'flutter run --dart-define=OPENAI_API_KEY=sk-your-key',
-        );
+      final (prompt, validIds, customImages) = await _buildData();
+      final b64 = base64Encode(cropped ?? jpegBytes);
+      debugPrint('GptVision: sending ${((cropped ?? jpegBytes).length / 1024).toStringAsFixed(0)}KB, customPosters=${customImages.length}');
+
+      // Single multi-modal message: text prompt + custom poster reference images + scanned image
+      final content = <Map<String, dynamic>>[
+        {'type': 'text', 'text': prompt},
+      ];
+      for (final p in customImages) {
+        content.add({'type': 'text', 'text': 'Reference image for ${p['id']} (${p['name']}):'}); 
+        content.add({'type': 'image_url', 'image_url': {'url': 'data:image/jpeg;base64,${p['b64']}', 'detail': 'low'}});
+      }
+      content.add({'type': 'text', 'text': 'Identify the scanned poster below. Reply with ONLY the poster ID, "unknown", or "not_a_poster":'}); 
+      content.add({'type': 'image_url', 'image_url': {'url': 'data:image/jpeg;base64,$b64', 'detail': 'low'}});
+
+      http.Response? response;
+      for (int attempt = 0; attempt < 3; attempt++) {
+        try {
+          response = await http.post(
+            Uri.parse(_openAiUrl),
+            headers: {
+              'Authorization': 'Bearer $_apiKey',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({
+              'model': 'gpt-4o-mini',
+              'messages': [
+                {'role': 'user', 'content': content}
+              ],
+              'max_tokens': 20,
+            }),
+          ).timeout(const Duration(seconds: 20));
+          break;
+        } catch (e) {
+          debugPrint('GptVision attempt ${attempt + 1} failed: $e');
+          if (attempt < 2) await Future.delayed(const Duration(seconds: 1));
+        }
+      }
+      if (response == null) {
         return const GptResult(posterId: null, looksLikePoster: false);
       }
-
-      final (prompt, validIds) = await _buildPrompt();
-      final b64 = base64Encode(cropped ?? jpegBytes);
-      debugPrint('GptVision: sending ${((cropped ?? jpegBytes).length / 1024).toStringAsFixed(0)}KB');
-
-      final response = await http.post(
-        Uri.parse(_openAiUrl),
-        headers: {
-          'Authorization': 'Bearer $_apiKey',
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({
-          'model': 'gpt-4o-mini',
-          'messages': [
-            {
-              'role': 'user',
-              'content': [
-                {'type': 'text', 'text': prompt},
-                {
-                  'type': 'image_url',
-                  'image_url': {
-                    'url': 'data:image/jpeg;base64,$b64',
-                    'detail': 'low',
-                  },
-                },
-              ],
-            }
-          ],
-          'max_tokens': 20,
-        }),
-      ).timeout(const Duration(seconds: 20));
 
       if (response.statusCode == 200) {
         final body = jsonDecode(response.body) as Map<String, dynamic>;
@@ -211,13 +238,9 @@ afis10: bright yellow background, large "<itec>" logo only
           }
         }
 
-        // Check if GPT thinks it sees a poster-like image
-        final looksLike = answer.contains('poster') ||
-            answer.contains('sign') ||
-            answer.contains('advertisement') ||
-            answer.contains('banner') ||
-            answer.contains('afis') ||
-            answer.contains('unknown');
+        // 'unknown' = looks like a poster but not recognised → offer to add it
+        // 'not_a_poster' (or anything else) = not a poster → show snackbar
+        final looksLike = answer.contains('unknown');
         debugPrint('GptVision: unknown, looksLikePoster=$looksLike');
         return GptResult(posterId: null, looksLikePoster: looksLike, croppedBytes: cropped);
       } else {

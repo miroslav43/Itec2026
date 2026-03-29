@@ -1,14 +1,15 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import '../services/sticker_generation_service.dart';
+import 'package:provider/provider.dart';
+
+import '../models/sticker_model.dart';
+import '../providers/socket_provider.dart';
+import '../services/ai_image_service.dart';
 import '../theme/app_theme.dart';
 
-/// Screen that lets the user generate a 32×32 pixel-art sticker on-device
-/// using stable-diffusion.cpp (LCM sampler, 64×64 internal, q2_k weights).
-///
-/// Returns the generated [Uint8List] PNG bytes via [Navigator.pop] when the
-/// user taps "STAMP ON CANVAS". Returns null when dismissed without stamping.
+/// Opened from BattleCanvasScreen when the user taps the STICKERS button.
+/// Returns a [StickerItem] when the user taps one to place it.
 class StickerGeneratorScreen extends StatefulWidget {
   const StickerGeneratorScreen({super.key});
 
@@ -16,507 +17,323 @@ class StickerGeneratorScreen extends StatefulWidget {
   State<StickerGeneratorScreen> createState() => _StickerGeneratorScreenState();
 }
 
-enum _Phase { checking, downloading, loading, ready, generating, done, error }
-
 class _StickerGeneratorScreenState extends State<StickerGeneratorScreen>
     with SingleTickerProviderStateMixin {
-  _Phase        _phase           = _Phase.checking;
-  double        _downloadProgress = 0;
-  Uint8List?    _stickerBytes;
-  String        _errorMessage    = '';
-  final _promptController        = TextEditingController();
-  late AnimationController _pulseCtrl;
-  late Animation<double>   _pulse;
+  late TabController _tabs;
+  final TextEditingController _promptCtrl = TextEditingController();
+  bool _generating = false;
+  bool _loadingLib = false;
+  StickerItem? _generated;
+  List<StickerItem> _library = [];
+  String? _errorMsg;
 
   @override
   void initState() {
     super.initState();
-    _pulseCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 900),
-    )..repeat(reverse: true);
-    _pulse = Tween<double>(begin: 0.6, end: 1.0).animate(
-      CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut),
-    );
-    _initialise();
+    _tabs = TabController(length: 2, vsync: this);
+    _loadLibrary();
   }
 
   @override
   void dispose() {
-    _pulseCtrl.dispose();
-    _promptController.dispose();
+    _tabs.dispose();
+    _promptCtrl.dispose();
     super.dispose();
   }
 
-  // ── Lifecycle ────────────────────────────────────────────────────────────────
-
-  Future<void> _initialise() async {
-    setState(() => _phase = _Phase.checking);
-
-    final loaded = await StickerGenerationService.isModelLoaded();
-    if (loaded) {
-      setState(() => _phase = _Phase.ready);
-      return;
-    }
-
-    final downloaded = await StickerGenerationService.isModelDownloaded();
-    if (!downloaded) {
-      setState(() => _phase = _Phase.downloading);
-      try {
-        await StickerGenerationService.downloadModel(
-          onProgress: (p) => setState(() => _downloadProgress = p),
-        );
-      } catch (e) {
-        _setError('Download failed: $e');
-        return;
-      }
-    }
-
-    setState(() => _phase = _Phase.loading);
-    try {
-      await StickerGenerationService.loadModel();
-    } catch (e) {
-      _setError('Model load failed: $e');
-      return;
-    }
-    setState(() => _phase = _Phase.ready);
+  Future<void> _loadLibrary() async {
+    setState(() => _loadingLib = true);
+    final serverUrl = context.read<SocketProvider>().serverUrl;
+    final list = await AiImageService.fetchStickers(serverUrl: serverUrl);
+    if (mounted) setState(() { _library = list; _loadingLib = false; });
   }
 
   Future<void> _generate() async {
-    final prompt = _promptController.text.trim();
+    final prompt = _promptCtrl.text.trim();
     if (prompt.isEmpty) return;
-
-    setState(() {
-      _phase        = _Phase.generating;
-      _stickerBytes = null;
-    });
-
-    try {
-      final bytes = await StickerGenerationService.generateSticker(prompt);
-      setState(() {
-        _stickerBytes = bytes;
-        _phase        = _Phase.done;
-      });
-    } catch (e) {
-      _setError(e.toString());
+    setState(() { _generating = true; _errorMsg = null; _generated = null; });
+    final serverUrl = context.read<SocketProvider>().serverUrl;
+    final result = await AiImageService.generateSticker(prompt: prompt, serverUrl: serverUrl);
+    if (!mounted) return;
+    if (result == null) {
+      setState(() { _generating = false; _errorMsg = 'Generarea a eșuat. Verifică conexiunea.'; });
+    } else {
+      setState(() { _generating = false; _generated = result; });
+      await _loadLibrary();
     }
   }
 
-  void _setError(String msg) => setState(() {
-        _phase        = _Phase.error;
-        _errorMessage = msg;
-      });
-
-  // ── Build ────────────────────────────────────────────────────────────────────
+  void _pickSticker(StickerItem sticker) {
+    Navigator.of(context).pop(sticker);
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppTheme.darkBg,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        leading: IconButton(
-          icon: const Icon(Icons.close, color: AppTheme.neonCyan),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Text(
-          'PIXEL STICKER',
-          style: AppTheme.neonTextStyle(color: AppTheme.neonCyan, fontSize: 18),
-        ),
-        centerTitle: true,
-      ),
+      backgroundColor: const Color(0xFF0D1117),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-          child: _buildBody(),
+        child: Column(
+          children: [
+            _buildHeader(),
+            _buildTabBar(),
+            Expanded(
+              child: TabBarView(
+                controller: _tabs,
+                children: [_buildGenerateTab(), _buildLibraryTab()],
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildBody() {
-    return switch (_phase) {
-      _Phase.checking    => _buildSpinner('INITIALIZING…'),
-      _Phase.downloading => _buildDownloadProgress(),
-      _Phase.loading     => _buildSpinner('LOADING MODEL…'),
-      _Phase.ready       => _buildInputUI(),
-      _Phase.generating  => _buildGenerating(),
-      _Phase.done        => _buildResult(),
-      _Phase.error       => _buildError(),
-    };
-  }
-
-  // ── Phase widgets ─────────────────────────────────────────────────────────────
-
-  Widget _buildSpinner(String label) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+  Widget _buildHeader() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: Colors.white12, width: 1)),
+      ),
+      child: Row(
         children: [
-          _neonGlowBox(
-            child: const SizedBox(
-              width: 48,
-              height: 48,
-              child: CircularProgressIndicator(
-                color: AppTheme.neonCyan,
-                strokeWidth: 2,
-              ),
-            ),
+          GestureDetector(
+            onTap: () => Navigator.of(context).pop(),
+            child: Icon(Icons.arrow_back_ios_new, color: AppTheme.neonCyan, size: 20),
           ),
-          const SizedBox(height: 20),
-          Text(label,
-              style: AppTheme.neonTextStyle(
-                  color: AppTheme.neonCyan, fontSize: 14)),
+          const SizedBox(width: 12),
+          Icon(Icons.auto_awesome, color: AppTheme.neonPurple, size: 22),
+          const SizedBox(width: 8),
+          Text('AI STICKERE',
+              style: AppTheme.neonTextStyle(color: AppTheme.neonPurple, fontSize: 18)),
+          const Spacer(),
+          Text('Selectează pentru a plasa',
+              style: TextStyle(color: Colors.white38, fontSize: 11)),
         ],
       ),
     );
   }
 
-  Widget _buildDownloadProgress() {
-    final pct = (_downloadProgress * 100).toStringAsFixed(0);
-    return Center(
+  Widget _buildTabBar() {
+    return Container(
+      color: const Color(0xFF0D1117),
+      child: TabBar(
+        controller: _tabs,
+        indicatorColor: AppTheme.neonPurple,
+        labelColor: AppTheme.neonPurple,
+        unselectedLabelColor: Colors.white38,
+        tabs: const [
+          Tab(text: 'GENEREAZĂ'),
+          Tab(text: 'LIBRĂRIE'),
+        ],
+      ),
+    );
+  }
+
+  // ── GENERATE tab ────────────────────────────────────────────────────────────
+
+  Widget _buildGenerateTab() {
+    return Padding(
+      padding: const EdgeInsets.all(16),
       child: Column(
-        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _neonGlowBox(
-            color: AppTheme.neonPurple,
-            child: const Icon(Icons.download_rounded,
-                color: AppTheme.neonPurple, size: 40),
-          ),
-          const SizedBox(height: 24),
-          Text('DOWNLOADING MODEL',
-              style: AppTheme.neonTextStyle(
-                  color: AppTheme.neonPurple, fontSize: 14)),
           const SizedBox(height: 8),
-          Text(
-            '~1 GB — one-time download',
-            style: TextStyle(color: Colors.white38, fontSize: 12),
-          ),
-          const SizedBox(height: 20),
-          Container(
-            height: 4,
-            decoration: BoxDecoration(
-              color: AppTheme.neonPurple.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(2),
-            ),
-            child: FractionallySizedBox(
-              widthFactor: _downloadProgress,
-              alignment: Alignment.centerLeft,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: AppTheme.neonPurple,
-                  borderRadius: BorderRadius.circular(2),
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppTheme.neonPurple.withOpacity(0.6),
-                      blurRadius: 6,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            '$pct%',
-            style: AppTheme.neonTextStyle(
-                color: AppTheme.neonPurple, fontSize: 20),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildInputUI() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const SizedBox(height: 8),
-        Text(
-          'DESCRIBE YOUR STICKER',
-          style: AppTheme.neonTextStyle(color: AppTheme.neonCyan, fontSize: 13),
-          textAlign: TextAlign.center,
-        ),
-        const SizedBox(height: 20),
-        Container(
-          decoration: AppTheme.neonBoxDecoration(
-              color: AppTheme.neonCyan, glowIntensity: 0.2),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-          child: TextField(
-            controller: _promptController,
+          Text('Descrie sticker-ul tău',
+              style: TextStyle(color: Colors.white70, fontSize: 13,
+                  letterSpacing: 0.5)),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _promptCtrl,
             style: const TextStyle(color: Colors.white, fontSize: 15),
-            maxLines: 3,
-            minLines: 1,
-            textCapitalization: TextCapitalization.sentences,
+            maxLines: 2,
             decoration: InputDecoration(
-              hintText: 'e.g. red tractor, cyberpunk skull, tiny dragon…',
-              hintStyle: TextStyle(
-                  color: AppTheme.neonCyan.withOpacity(0.35), fontSize: 14),
-              border: InputBorder.none,
+              hintText: 'ex: cyberpunk wolf, neon fish, pixel dragon...',
+              hintStyle: TextStyle(color: Colors.white24),
+              filled: true,
+              fillColor: Colors.white.withOpacity(0.06),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(
+                    color: AppTheme.neonPurple.withOpacity(0.4)),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(
+                    color: AppTheme.neonPurple.withOpacity(0.4)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(
+                    color: AppTheme.neonPurple, width: 1.5),
+              ),
             ),
             onSubmitted: (_) => _generate(),
           ),
-        ),
-        const SizedBox(height: 12),
-        Text(
-          '32×32 pixel art • LCM sampler • on-device',
-          style:
-              TextStyle(color: Colors.white24, fontSize: 11, letterSpacing: 0.5),
-          textAlign: TextAlign.center,
-        ),
-        const SizedBox(height: 28),
-        _neonButton(
-          label: 'GENERATE',
-          icon: Icons.auto_awesome,
-          color: AppTheme.neonCyan,
-          onTap: _generate,
-        ),
-        const Spacer(),
-        _buildExamples(),
-      ],
-    );
-  }
-
-  Widget _buildGenerating() {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          AnimatedBuilder(
-            animation: _pulse,
-            builder: (_, child) => Opacity(opacity: _pulse.value, child: child),
-            child: _neonGlowBox(
-              color: AppTheme.neonPink,
-              size: 80,
-              child: const Icon(Icons.auto_awesome,
-                  color: AppTheme.neonPink, size: 38),
-            ),
-          ),
-          const SizedBox(height: 24),
-          Text('GENERATING STICKER',
-              style: AppTheme.neonTextStyle(
-                  color: AppTheme.neonPink, fontSize: 14)),
-          const SizedBox(height: 8),
-          Text(
-            '~1–3 seconds on device…',
-            style: TextStyle(color: Colors.white38, fontSize: 12),
-          ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 12),
           SizedBox(
-            width: 160,
-            child: LinearProgressIndicator(
-              backgroundColor: AppTheme.neonPink.withOpacity(0.15),
-              valueColor:
-                  const AlwaysStoppedAnimation<Color>(AppTheme.neonPink),
+            height: 48,
+            child: ElevatedButton.icon(
+              onPressed: _generating ? null : _generate,
+              icon: _generating
+                  ? const SizedBox(
+                      width: 18, height: 18,
+                      child: CircularProgressIndicator(
+                          color: Colors.white, strokeWidth: 2))
+                  : const Icon(Icons.auto_awesome, size: 20),
+              label: Text(_generating ? 'Se generează...' : 'GENEREAZĂ',
+                  style: const TextStyle(
+                      fontWeight: FontWeight.bold, letterSpacing: 1.5)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.neonPurple.withOpacity(0.2),
+                foregroundColor: AppTheme.neonPurple,
+                side: BorderSide(color: AppTheme.neonPurple.withOpacity(0.7)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
             ),
           ),
+          if (_errorMsg != null) ...[
+            const SizedBox(height: 12),
+            Text(_errorMsg!,
+                style: TextStyle(color: AppTheme.neonRed, fontSize: 13)),
+          ],
+          if (_generated != null) ...[
+            const SizedBox(height: 20),
+            Text('Sticker generat:',
+                style: TextStyle(color: Colors.white54, fontSize: 12)),
+            const SizedBox(height: 10),
+            Center(
+              child: _StickerCard(
+                sticker: _generated!,
+                onTap: () => _pickSticker(_generated!),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Center(
+              child: Text('Apasă pentru a-l plasa pe canvas',
+                  style: TextStyle(color: Colors.white38, fontSize: 11)),
+            ),
+          ],
         ],
       ),
     );
   }
 
-  Widget _buildResult() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const SizedBox(height: 12),
-        Text(
-          'PIXEL STICKER READY',
-          style:
-              AppTheme.neonTextStyle(color: AppTheme.neonGreen, fontSize: 14),
-          textAlign: TextAlign.center,
+  // ── LIBRARY tab ─────────────────────────────────────────────────────────────
+
+  Widget _buildLibraryTab() {
+    if (_loadingLib) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(color: AppTheme.neonPurple),
+            const SizedBox(height: 12),
+            Text('Se încarcă...', style: TextStyle(color: Colors.white54)),
+          ],
         ),
-        const SizedBox(height: 28),
-        Center(
-          child: Container(
-            width: 160,
-            height: 160,
-            decoration: BoxDecoration(
-              border: Border.all(color: AppTheme.neonGreen, width: 2),
-              borderRadius: BorderRadius.circular(8),
-              boxShadow: [
-                BoxShadow(
-                    color: AppTheme.neonGreen.withOpacity(0.4),
-                    blurRadius: 20,
-                    spreadRadius: 2),
-              ],
-              color: AppTheme.darkBgSecondary,
+      );
+    }
+    if (_library.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.image_not_supported_outlined,
+                color: Colors.white24, size: 48),
+            const SizedBox(height: 12),
+            Text('Niciun sticker generat încă.\nFolosește tab-ul GENEREAZĂ!',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white38, fontSize: 13)),
+            const SizedBox(height: 16),
+            TextButton.icon(
+              onPressed: _loadLibrary,
+              icon: Icon(Icons.refresh, color: AppTheme.neonPurple),
+              label: Text('Reîncarcă',
+                  style: TextStyle(color: AppTheme.neonPurple)),
             ),
-            child: _stickerBytes != null
-                ? Image.memory(
-                    _stickerBytes!,
-                    // Nearest-neighbour scaling — preserves pixel crispness
-                    filterQuality: FilterQuality.none,
-                    fit: BoxFit.contain,
-                  )
-                : const SizedBox.shrink(),
+          ],
+        ),
+      );
+    }
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Row(
+            children: [
+              Text('${_library.length} stickere disponibile',
+                  style: TextStyle(color: Colors.white38, fontSize: 12)),
+              const Spacer(),
+              GestureDetector(
+                onTap: _loadLibrary,
+                child: Icon(Icons.refresh, color: Colors.white38, size: 18),
+              ),
+            ],
           ),
         ),
-        const SizedBox(height: 8),
-        Text(
-          '32×32 pixel art',
-          style: TextStyle(color: Colors.white24, fontSize: 11),
-          textAlign: TextAlign.center,
-        ),
-        const SizedBox(height: 32),
-        _neonButton(
-          label: 'STAMP ON CANVAS',
-          icon: Icons.add_circle_outline,
-          color: AppTheme.neonGreen,
-          onTap: () => Navigator.pop(context, _stickerBytes),
-        ),
-        const SizedBox(height: 12),
-        _neonButton(
-          label: 'REGENERATE',
-          icon: Icons.refresh,
-          color: AppTheme.neonCyan,
-          onTap: _generate,
-        ),
-        const SizedBox(height: 12),
-        TextButton(
-          onPressed: () {
-            setState(() => _phase = _Phase.ready);
-          },
-          child: Text(
-            'CHANGE PROMPT',
-            style: TextStyle(
-                color: Colors.white38, fontSize: 13, letterSpacing: 1),
+        Expanded(
+          child: GridView.builder(
+            padding: const EdgeInsets.all(12),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              crossAxisSpacing: 10,
+              mainAxisSpacing: 10,
+            ),
+            itemCount: _library.length,
+            itemBuilder: (_, i) => _StickerCard(
+              sticker: _library[i],
+              onTap: () => _pickSticker(_library[i]),
+            ),
           ),
         ),
       ],
     );
   }
+}
 
-  Widget _buildError() {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _neonGlowBox(
-            color: AppTheme.neonRed,
-            child:
-                const Icon(Icons.error_outline, color: AppTheme.neonRed, size: 36),
-          ),
-          const SizedBox(height: 20),
-          Text('ERROR',
-              style:
-                  AppTheme.neonTextStyle(color: AppTheme.neonRed, fontSize: 16)),
-          const SizedBox(height: 8),
-          Text(
-            _errorMessage,
-            style: const TextStyle(color: Colors.white38, fontSize: 12),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 24),
-          _neonButton(
-            label: 'RETRY',
-            icon: Icons.refresh,
-            color: AppTheme.neonRed,
-            onTap: _initialise,
-          ),
-        ],
-      ),
-    );
-  }
+// ── Sticker card ─────────────────────────────────────────────────────────────
 
-  // ── Helper widgets ──────────────────────────────────────────────────────────
+class _StickerCard extends StatelessWidget {
+  final StickerItem sticker;
+  final VoidCallback onTap;
 
-  Widget _buildExamples() {
-    const examples = [
-      'red tractor',
-      'cyberpunk skull',
-      'tiny dragon',
-      'glowing sword',
-      'pixel cat',
-    ];
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('EXAMPLES',
-            style: TextStyle(
-                color: Colors.white24, fontSize: 10, letterSpacing: 1.5)),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: examples
-              .map((e) => GestureDetector(
-                    onTap: () {
-                      _promptController.text = e;
-                      _promptController.selection = TextSelection.fromPosition(
-                        TextPosition(offset: e.length),
-                      );
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        border: Border.all(
-                            color: AppTheme.neonCyan.withOpacity(0.3)),
-                        borderRadius: BorderRadius.circular(20),
-                        color: AppTheme.neonCyan.withOpacity(0.05),
-                      ),
-                      child: Text(
-                        e,
-                        style: TextStyle(
-                            color: AppTheme.neonCyan.withOpacity(0.7),
-                            fontSize: 12),
-                      ),
-                    ),
-                  ))
-              .toList(),
-        ),
-        const SizedBox(height: 16),
-      ],
-    );
-  }
+  const _StickerCard({required this.sticker, required this.onTap});
 
-  Widget _neonGlowBox({
-    required Widget child,
-    Color color = AppTheme.neonCyan,
-    double size = 72,
-  }) {
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(color: color.withOpacity(0.7), width: 1.5),
-        boxShadow: [
-          BoxShadow(color: color.withOpacity(0.3), blurRadius: 20),
-        ],
-        color: color.withOpacity(0.08),
-      ),
-      child: Center(child: child),
-    );
-  }
-
-  Widget _neonButton({
-    required String label,
-    required IconData icon,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
+  @override
+  Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 14),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.12),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: color.withOpacity(0.8), width: 1),
-          boxShadow: [
-            BoxShadow(color: color.withOpacity(0.25), blurRadius: 12),
-          ],
+          color: AppTheme.neonPurple.withOpacity(0.07),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+              color: AppTheme.neonPurple.withOpacity(0.35), width: 1),
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+        child: Column(
           children: [
-            Icon(icon, color: color, size: 20),
-            const SizedBox(width: 10),
-            Text(
-              label,
-              style: AppTheme.neonTextStyle(color: color, fontSize: 14),
+            Expanded(
+              child: ClipRRect(
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(11)),
+                child: Image.memory(
+                  sticker.imageBytes,
+                  fit: BoxFit.cover,
+                  width: double.infinity,
+                  errorBuilder: (_, __, ___) => const Icon(
+                      Icons.broken_image, color: Colors.white24),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              child: Text(
+                sticker.prompt,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white54, fontSize: 9),
+              ),
             ),
           ],
         ),

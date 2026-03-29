@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import '../models/stroke_model.dart';
+import '../models/sticker_model.dart';
 import '../services/player_stats_service.dart';
 import '../theme/app_theme.dart';
 
@@ -32,8 +33,8 @@ class DrawingProvider extends ChangeNotifier {
   // All local strokes (for immediate display)
   final List<Stroke> _localStrokes = [];
 
-  // Pixel-art sticker stamps
-  final List<StickerStamp> _stamps = [];
+  // Placed stickers on this canvas
+  final List<PlacedSticker> _placedStickers = [];
   
   // Predefined colors
   final List<Color> availableColors = [
@@ -55,9 +56,9 @@ class DrawingProvider extends ChangeNotifier {
   double get brushSize => _brushSize;
   bool get isEraserMode => _isEraserMode;
   bool get isDrawing => _isDrawing;
-  List<StrokePoint>  get currentPoints => _currentPoints;
-  List<Stroke>       get localStrokes  => _localStrokes;
-  List<StickerStamp> get stamps        => List.unmodifiable(_stamps);
+  List<StrokePoint> get currentPoints => _currentPoints;
+  List<Stroke> get localStrokes => _localStrokes;
+  List<PlacedSticker> get placedStickers => _placedStickers;
   
   void setColor(Color color) {
     _currentColor = color;
@@ -148,32 +149,22 @@ class DrawingProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ── Sticker stamp management ────────────────────────────────────────────────
-
-  /// Adds a new sticker stamp at [position] (canvas-local coordinates).
-  void addStamp(Uint8List bytes, Offset position) {
-    _stamps.add(StickerStamp(bytes: bytes, position: position));
+  void addPlacedSticker(PlacedSticker sticker) {
+    _placedStickers.add(sticker);
     notifyListeners();
   }
 
-  /// Moves the stamp at [index] to [newPosition].
-  void updateStampPosition(int index, Offset newPosition) {
-    if (index < 0 || index >= _stamps.length) return;
-    _stamps[index] = _stamps[index].copyWith(position: newPosition);
-    notifyListeners();
-  }
-
-  /// Removes the most recently added stamp.
-  void removeLastStamp() {
-    if (_stamps.isNotEmpty) {
-      _stamps.removeLast();
+  void updateStickerPosition(String uid, double x, double y) {
+    final idx = _placedStickers.indexWhere((s) => s.uid == uid);
+    if (idx >= 0) {
+      _placedStickers[idx].x = x;
+      _placedStickers[idx].y = y;
       notifyListeners();
     }
   }
 
-  /// Removes all sticker stamps.
-  void clearStamps() {
-    _stamps.clear();
+  void removePlacedSticker(String uid) {
+    _placedStickers.removeWhere((s) => s.uid == uid);
     notifyListeners();
   }
 
@@ -184,7 +175,7 @@ class DrawingProvider extends ChangeNotifier {
     _isDrawing    = false;
     _currentPoints = [];
     _localStrokes.clear();
-    _stamps.clear();
+    _placedStickers.clear();
     notifyListeners();
   }
 }

@@ -34,7 +34,11 @@ dependencies:
   
   # Audio & Haptics
   audioplayers: ^5.2.1
+  file_picker: ^8.0.5
   
+  # 3D Map viewer
+  model_viewer_plus: ^1.7.2
+
   # Utilities
   uuid: ^4.2.1
   collection: ^1.18.0
@@ -52,3 +56,4 @@ flutter:
     - assets/sounds/
     - assets/images/
     - assets/fonts/
+    - assets/map/
