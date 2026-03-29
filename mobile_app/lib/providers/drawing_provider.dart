@@ -1,9 +1,24 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import '../models/stroke_model.dart';
 import '../models/sticker_model.dart';
 import '../services/player_stats_service.dart';
 import '../theme/app_theme.dart';
+
+/// A pixel-art sticker stamped onto the canvas at a given position.
+class StickerStamp {
+  final Uint8List bytes;    // 32×32 PNG
+  final Offset   position;  // top-left in canvas local coordinates
+
+  const StickerStamp({required this.bytes, required this.position});
+
+  StickerStamp copyWith({Uint8List? bytes, Offset? position}) => StickerStamp(
+        bytes:    bytes    ?? this.bytes,
+        position: position ?? this.position,
+      );
+}
 
 class DrawingProvider extends ChangeNotifier {
   // Drawing settings
@@ -157,7 +172,7 @@ class DrawingProvider extends ChangeNotifier {
     _currentColor = AppTheme.neonCyan;
     _brushSize = PlayerStatsService.brushSizeForLevel;
     _isEraserMode = false;
-    _isDrawing = false;
+    _isDrawing    = false;
     _currentPoints = [];
     _localStrokes.clear();
     _placedStickers.clear();

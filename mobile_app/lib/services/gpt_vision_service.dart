@@ -18,6 +18,9 @@ class GptResult {
 }
 
 class GptVisionService {
+  /// Compile-time only. Run:
+  /// `flutter run --dart-define=OPENAI_API_KEY=sk-...`
+  /// Release: `flutter build ipa --dart-define=OPENAI_API_KEY=sk-...`
   static const _apiKey = String.fromEnvironment('OPENAI_API_KEY');
   static const _openAiUrl = 'https://api.openai.com/v1/chat/completions';
 

@@ -32,6 +32,7 @@ mobile_app/.flutter-plugins-dependencies
 mobile_app/pubspec.lock
 
 # iOS
+mobile_app/ios/**/xcuserdata/
 mobile_app/ios/Pods/
 mobile_app/ios/.symlinks/
 mobile_app/ios/Flutter/Flutter.framework
@@ -62,7 +63,7 @@ mobile_app/ios/Runner/GeneratedPluginRegistrant*
 .env.local
 backend/.env
 mobile_app/.env
-mobile_app/.dart_env
+mobile_app/tool/run_ios_with_openai.sh
 
 # OS
 .DS_Store

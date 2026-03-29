@@ -33,7 +33,6 @@ dependencies:
   flutter_colorpicker: ^1.0.3
   
   # Audio & Haptics
-  vibration: ^1.8.4
   audioplayers: ^5.2.1
   file_picker: ^8.0.5
   
