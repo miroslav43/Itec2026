@@ -25,6 +25,7 @@ add_library(stable_diffusion_jni SHARED stable_diffusion_jni.cpp)
 
 target_include_directories(stable_diffusion_jni PRIVATE
     ${stable_diffusion_cpp_SOURCE_DIR}
+    ${stable_diffusion_cpp_SOURCE_DIR}/include
 )
 
 target_link_libraries(stable_diffusion_jni
