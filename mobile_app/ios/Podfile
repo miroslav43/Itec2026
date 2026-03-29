@@ -2,6 +2,12 @@
 #   cd .. && flutter pub get && cd ios && pod install
 # Always open Runner.xcworkspace (never Runner.xcodeproj alone) so Pods build
 # and plugin modules (e.g. audioplayers_darwin) resolve.
+#
+# Google ML Kit ships simulator binaries as x86_64 only (arm64 slice is device).
+# Runner sets EXCLUDED_ARCHS arm64 for iphonesimulator to match Pods. On Apple
+# Silicon, pick a simulator run destination labeled "(Rosetta)" or install a
+# Universal iOS simulator runtime (Xcode Settings → Components, or
+# `xcodebuild -downloadPlatform iOS -architectureVariant universal`).
 
 platform :ios, '13.0'
 
