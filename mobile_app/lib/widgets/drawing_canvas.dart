@@ -1,8 +1,12 @@
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_state_provider.dart';
 import '../providers/drawing_provider.dart';
 import '../models/stroke_model.dart';
+import '../models/sticker_model.dart';
 import '../services/haptic_service.dart';
 import '../theme/app_theme.dart';
 
@@ -10,12 +14,14 @@ class DrawingCanvas extends StatefulWidget {
   final String posterId;
   final String? posterImageUrl;
   final Function(Stroke)? onStrokeComplete;
-  
+  final GlobalKey? repaintKey;
+
   const DrawingCanvas({
     super.key,
     required this.posterId,
     this.posterImageUrl,
     this.onStrokeComplete,
+    this.repaintKey,
   });
 
   @override
@@ -25,6 +31,24 @@ class DrawingCanvas extends StatefulWidget {
 class _DrawingCanvasState extends State<DrawingCanvas> {
   Size _canvasSize = Size.zero;
   int _hapticCounter = 0;
+  final Map<String, ui.Image> _stickerImageCache = {};
+
+  @override
+  void dispose() {
+    for (final img in _stickerImageCache.values) img.dispose();
+    super.dispose();
+  }
+
+  Future<ui.Image?> _loadStickerImage(String uid, Uint8List bytes) async {
+    if (_stickerImageCache.containsKey(uid)) return _stickerImageCache[uid];
+    try {
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      final img = frame.image;
+      _stickerImageCache[uid] = img;
+      return img;
+    } catch (_) { return null; }
+  }
   
   @override
   Widget build(BuildContext context) {
@@ -35,6 +59,61 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
       builder: (context, constraints) {
         _canvasSize = Size(constraints.maxWidth, constraints.maxHeight);
         
+        final renderStack = Stack(
+          fit: StackFit.expand,
+          children: [
+            // Dark background behind poster
+            Container(color: AppTheme.darkBg),
+            // Poster image — network for custom, asset for built-in
+            if (widget.posterImageUrl != null)
+              Image.network(
+                widget.posterImageUrl!,
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+              )
+            else
+              Image.asset(
+                'assets/posters/${widget.posterId}.png',
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+              ),
+            // Subtle grid overlay
+            CustomPaint(
+              painter: GridPainter(canvasSize: _canvasSize, gridSize: 20),
+            ),
+            // Drawing strokes
+            CustomPaint(
+              painter: CanvasPainter(
+                strokes: drawingProvider.localStrokes,
+                currentPoints: drawingProvider.currentPoints,
+                currentColor: drawingProvider.currentColor,
+                currentSize: drawingProvider.brushSize,
+                isEraserMode: drawingProvider.isEraserMode,
+                canvasSize: _canvasSize,
+              ),
+            ),
+            // Placed stickers (non-interactive display layer)
+            ...drawingProvider.placedStickers.map((ps) {
+              _loadStickerImage(ps.uid, ps.imageBytes).then((_) {
+                if (mounted) setState(() {});
+              });
+              final cachedImg = _stickerImageCache[ps.uid];
+              if (cachedImg == null) return const SizedBox.shrink();
+              final stickerSize = 80.0 * ps.scale;
+              return Positioned(
+                left: ps.x * _canvasSize.width - stickerSize / 2,
+                top:  ps.y * _canvasSize.height - stickerSize / 2,
+                child: IgnorePointer(
+                  child: SizedBox(
+                    width: stickerSize, height: stickerSize,
+                    child: RawImage(image: cachedImg, fit: BoxFit.contain),
+                  ),
+                ),
+              );
+            }),
+          ],
+        );
+
         return GestureDetector(
           onPanStart: (details) => _onPanStart(details, drawingProvider),
           onPanUpdate: (details) => _onPanUpdate(details, drawingProvider),
@@ -42,41 +121,9 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
           child: SizedBox(
             width: _canvasSize.width,
             height: _canvasSize.height,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                // Dark background behind poster
-                Container(color: AppTheme.darkBg),
-                // Poster image — network for custom, asset for built-in
-                if (widget.posterImageUrl != null)
-                  Image.network(
-                    widget.posterImageUrl!,
-                    fit: BoxFit.contain,
-                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                  )
-                else
-                  Image.asset(
-                    'assets/posters/${widget.posterId}.png',
-                    fit: BoxFit.contain,
-                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                  ),
-                // Subtle grid overlay
-                CustomPaint(
-                  painter: GridPainter(canvasSize: _canvasSize, gridSize: 20),
-                ),
-                // Drawing strokes
-                CustomPaint(
-                  painter: CanvasPainter(
-                    strokes: drawingProvider.localStrokes,
-                    currentPoints: drawingProvider.currentPoints,
-                    currentColor: drawingProvider.currentColor,
-                    currentSize: drawingProvider.brushSize,
-                    isEraserMode: drawingProvider.isEraserMode,
-                    canvasSize: _canvasSize,
-                  ),
-                ),
-              ],
-            ),
+            child: widget.repaintKey != null
+                ? RepaintBoundary(key: widget.repaintKey, child: renderStack)
+                : renderStack,
           ),
         );
       },

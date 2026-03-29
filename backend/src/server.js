@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const multer = require('multer');
 const { pool, initDB } = require('./db');
 const Jimp = require('jimp');
 
@@ -16,6 +17,17 @@ const JWT_SECRET = process.env.JWT_SECRET || 'itec_override_secret_2025';
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
+
+// ── Anthem storage setup (memory → DB) ───────────────────────────────────────
+const anthemUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB max
+  fileFilter: (req, file, cb) => {
+    const ok = file.mimetype === 'audio/mpeg' || file.mimetype === 'audio/mp3'
+               || file.originalname.endsWith('.mp3');
+    cb(null, ok);
+  },
+});
 
 // Serve custom poster images statically
 const CUSTOM_POSTERS_DIR = path.join(__dirname, 'custom_posters');
@@ -101,8 +113,41 @@ async function loadCustomPostersFromDB() {
 // In-memory state for each poster room
 const posterRooms = {};
 
-// Initialize a poster room
-function initPosterRoom(posterId) {
+// ── Territory DB helpers ─────────────────────────────────────────────────────
+async function saveTerritoryToDB(posterId, grid, territory) {
+  try {
+    await pool.query(
+      `INSERT INTO territory_state (poster_id, grid_json, territory_json, dominant, updated_at)
+       VALUES ($1,$2,$3,$4,NOW())
+       ON CONFLICT (poster_id) DO UPDATE
+       SET grid_json=$2, territory_json=$3, dominant=$4, updated_at=NOW()`,
+      [posterId, JSON.stringify(grid), JSON.stringify(territory), territory.dominant || null]
+    );
+  } catch (e) {
+    console.error('[DB] saveTerritoryToDB error:', e.message);
+  }
+}
+
+async function loadTerritoryFromDB(posterId) {
+  try {
+    const { rows } = await pool.query(
+      'SELECT grid_json, territory_json FROM territory_state WHERE poster_id=$1',
+      [posterId]
+    );
+    if (rows.length > 0) {
+      return {
+        grid: JSON.parse(rows[0].grid_json),
+        territory: JSON.parse(rows[0].territory_json)
+      };
+    }
+  } catch (e) {
+    console.error('[DB] loadTerritoryFromDB error:', e.message);
+  }
+  return null;
+}
+
+// Initialize a poster room (async to load territory from DB)
+async function initPosterRoom(posterId) {
   if (!posterRooms[posterId]) {
     const poster = POSTERS[posterId];
     if (!poster) return null;
@@ -117,6 +162,14 @@ function initPosterRoom(posterId) {
       territory: {},
       lastUpdate: Date.now()
     };
+
+    // Restore from DB
+    const saved = await loadTerritoryFromDB(posterId);
+    if (saved) {
+      posterRooms[posterId].grid = saved.grid;
+      posterRooms[posterId].territory = saved.territory;
+      console.log(`[DB] Restored territory for ${posterId} (dominant: ${saved.territory.dominant})`);
+    }
   }
   return posterRooms[posterId];
 }
@@ -181,6 +234,8 @@ function updateGridFromStroke(room, stroke) {
   }
   
   room.territory = calculateTerritory(room);
+  // Persist to DB (fire-and-forget)
+  saveTerritoryToDB(room.posterId, room.grid, room.territory);
   return room.territory;
 }
 
@@ -272,6 +327,218 @@ app.get('/api/teams', (req, res) => {
 
 app.get('/api/custom-posters', (req, res) => {
   res.json(Object.values(customPosters));
+});
+
+// ============================================
+// STICKER API
+// ============================================
+
+app.get('/api/stickers', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT id, prompt, creator_id, image_base64, created_at FROM stickers ORDER BY created_at DESC LIMIT 100'
+    );
+    res.json(rows);
+  } catch (e) {
+    console.error('GET /api/stickers error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.delete('/api/stickers', async (req, res) => {
+  try {
+    const { rowCount } = await pool.query('DELETE FROM stickers');
+    res.json({ ok: true, deleted: rowCount });
+  } catch (e) {
+    console.error('DELETE /api/stickers error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/api/stickers', async (req, res) => {
+  const { id, prompt, creatorId, imageBase64 } = req.body;
+  if (!id || !prompt || !imageBase64) {
+    return res.status(400).json({ error: 'id, prompt, imageBase64 required' });
+  }
+  try {
+    await pool.query(
+      'INSERT INTO stickers (id, prompt, creator_id, image_base64, created_at) VALUES ($1, $2, $3, $4, NOW()) ON CONFLICT (id) DO NOTHING',
+      [id, prompt, creatorId || 'anonymous', imageBase64]
+    );
+    res.json({ ok: true, id });
+  } catch (e) {
+    console.error('POST /api/stickers error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ============================================
+// MAP PINS API
+// ============================================
+
+app.get('/api/map-pins', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT poster_id, x, y, z, nx, ny, nz FROM map_pins ORDER BY created_at ASC'
+    );
+    res.json(rows);
+  } catch (e) {
+    console.error('GET /api/map-pins error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/api/map-pins/:posterId', async (req, res) => {
+  const { posterId } = req.params;
+  const { x, y, z, nx = 0, ny = 1, nz = 0 } = req.body;
+  if (x == null || y == null || z == null) {
+    return res.status(400).json({ error: 'x, y, z required' });
+  }
+  try {
+    await pool.query(
+      `INSERT INTO map_pins (poster_id, x, y, z, nx, ny, nz, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
+       ON CONFLICT (poster_id) DO UPDATE
+       SET x=$2, y=$3, z=$4, nx=$5, ny=$6, nz=$7`,
+      [posterId, x, y, z, nx, ny, nz]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('POST /api/map-pins error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.delete('/api/map-pins/:posterId', async (req, res) => {
+  const { posterId } = req.params;
+  try {
+    await pool.query('DELETE FROM map_pins WHERE poster_id=$1', [posterId]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('DELETE /api/map-pins error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.delete('/api/map-pins', async (req, res) => {
+  try {
+    const { rowCount } = await pool.query('DELETE FROM map_pins');
+    res.json({ ok: true, deleted: rowCount });
+  } catch (e) {
+    console.error('DELETE /api/map-pins (all) error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Reset all poster territories (clear battle results so fights can restart)
+app.delete('/api/territory/reset', async (req, res) => {
+  try {
+    // Clear in-memory territory for all rooms
+    for (const [posterId, room] of Object.entries(posterRooms)) {
+      if (room.grid) {
+        const size = room.grid.length;
+        room.grid = Array(size).fill(null).map(() => Array(size).fill(''));
+      }
+      room.territory = null;
+      // Notify connected clients
+      io.to(posterId).emit('territory_update', { posterId, teams: {}, dominant: null, total: 0 });
+    }
+    // Clear from DB
+    try { await pool.query('DELETE FROM territory_state'); } catch (_) {}
+    try { await pool.query('DELETE FROM strokes'); } catch (_) {}
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('DELETE /api/territory/reset error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Anthem endpoints (stored in DB as BYTEA) ─────────────────────────────────
+// Upload MP3 for a team — stores in team_anthems table
+app.post('/api/anthem/:teamId', (req, res) => {
+  anthemUpload.single('anthem')(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    if (!req.file) return res.status(400).json({ error: 'No MP3 file received' });
+    const { teamId } = req.params;
+    try {
+      await pool.query(
+        `INSERT INTO team_anthems (team_id, audio_data, mime_type, updated_at)
+         VALUES ($1,$2,'audio/mpeg',NOW())
+         ON CONFLICT (team_id) DO UPDATE
+         SET audio_data=$2, updated_at=NOW()`,
+        [teamId, req.file.buffer]
+      );
+      console.log(`[Anthem] Stored in DB for team ${teamId} (${req.file.size} bytes)`);
+      res.json({ ok: true, teamId, size: req.file.size });
+    } catch (e) {
+      console.error('[Anthem] DB insert error:', e.message);
+      res.status(500).json({ error: 'DB error' });
+    }
+  });
+});
+
+// Stream MP3 for a team from DB
+app.get('/api/anthem/:teamId', async (req, res) => {
+  const { teamId } = req.params;
+  try {
+    const { rows } = await pool.query(
+      'SELECT audio_data, mime_type FROM team_anthems WHERE team_id=$1',
+      [teamId]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'No anthem' });
+    const buf = rows[0].audio_data;
+    res.setHeader('Content-Type', rows[0].mime_type || 'audio/mpeg');
+    res.setHeader('Content-Length', buf.length);
+    res.send(buf);
+  } catch (e) {
+    res.status(500).json({ error: 'DB error' });
+  }
+});
+
+// Check if anthem exists for a team
+app.get('/api/anthem/:teamId/exists', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT 1 FROM team_anthems WHERE team_id=$1',
+      [req.params.teamId]
+    );
+    res.json({ exists: rows.length > 0 });
+  } catch (e) {
+    res.json({ exists: false });
+  }
+});
+
+// Delete anthem for a team
+app.delete('/api/anthem/:teamId', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM team_anthems WHERE team_id=$1', [req.params.teamId]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'DB error' });
+  }
+});
+
+// Expose territory for all posters — in-memory + DB fallback
+app.get('/api/territory', async (req, res) => {
+  const result = {};
+  // 1. In-memory rooms
+  for (const [posterId, room] of Object.entries(posterRooms)) {
+    if (room.territory && room.territory.dominant) {
+      result[posterId] = room.territory;
+    }
+  }
+  // 2. DB — posters not yet loaded into memory
+  try {
+    const { rows } = await pool.query(
+      'SELECT poster_id, territory_json FROM territory_state WHERE dominant IS NOT NULL'
+    );
+    for (const row of rows) {
+      if (!result[row.poster_id]) {
+        result[row.poster_id] = JSON.parse(row.territory_json);
+      }
+    }
+  } catch (e) { /* ignore */ }
+  res.json(result);
 });
 
 app.post('/api/custom-posters/match', async (req, res) => {
@@ -380,7 +647,7 @@ io.on('connection', (socket) => {
   let currentUser = null;
   
   // Join a poster room
-  socket.on('join_poster_room', (data) => {
+  socket.on('join_poster_room', async (data) => {
     const { posterId, userId, teamId, username } = data;
     
     // Validate poster
@@ -403,8 +670,8 @@ io.on('connection', (socket) => {
       }
     }
     
-    // Initialize room if needed
-    const room = initPosterRoom(posterId);
+    // Initialize room if needed (async — loads territory from DB)
+    const room = await initPosterRoom(posterId);
     
     // Auto-assign a different team if the requested team is already taken by someone else
     const usedTeams = new Set(Array.from(room.users.values()).map(u => u.teamId));

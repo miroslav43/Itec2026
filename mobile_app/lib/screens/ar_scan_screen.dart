@@ -1,25 +1,18 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:image/image.dart' as img_pkg;
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
+import 'package:provider/provider.dart';
 
-import 'battle_screen_placeholder.dart';
-
-// ── Image resize for ARCore (top-level for compute isolate) ──────────────────
-
-Uint8List _resizeForAR(Uint8List raw) {
-  final decoded = img_pkg.decodeImage(raw);
-  if (decoded == null) return raw;
-  // 600px gives ARCore more feature points than 300px; PNG preserves edges
-  final targetW = decoded.width > 600 ? 600 : decoded.width;
-  final resized  = img_pkg.copyResize(decoded, width: targetW);
-  return Uint8List.fromList(img_pkg.encodePng(resized));
-}
+import '../providers/app_state_provider.dart';
+import '../providers/socket_provider.dart';
+import '../services/anthem_service.dart';
+import 'battle_canvas_screen.dart';
+import 'sticker_generator_screen.dart';
 
 // ── Poster metadata ──────────────────────────────────────────────────────────
 
@@ -50,27 +43,12 @@ const _kMethodChannel = 'com.itec.override/ar_method';
 const _kEventChannel  = 'com.itec.override/ar_events';
 const _kViewType      = 'ar_poster_view';
 
-// ── Overlay data ─────────────────────────────────────────────────────────────
-
-class _OverlayData {
-  final String posterId;
-  final double cx, cy, widthPx, heightPx, angleDeg;
-
-  const _OverlayData({
-    required this.posterId,
-    required this.cx,
-    required this.cy,
-    required this.widthPx,
-    required this.heightPx,
-    required this.angleDeg,
-  });
-}
-
 // ── Screen ───────────────────────────────────────────────────────────────────
 
 class ArScanScreen extends StatefulWidget {
   final String? targetPosterId;
-  const ArScanScreen({super.key, this.targetPosterId});
+  final String? textureFilePath;  // optional: rendered battle canvas PNG
+  const ArScanScreen({super.key, this.targetPosterId, this.textureFilePath});
 
   @override
   State<ArScanScreen> createState() => _ArScanScreenState();
@@ -80,12 +58,15 @@ class _ArScanScreenState extends State<ArScanScreen> {
   final MethodChannel _method = const MethodChannel(_kMethodChannel);
   final EventChannel  _events = const EventChannel(_kEventChannel);
 
-  _OverlayData? _overlay;
   String?       _detectedId;
   bool          _dialogShown  = false;
-  bool          _showOverlay  = false;
-  bool          _arSessionReady = false; // true once ARCore session is live
+  bool          _trackingActive = false;  // true when ARCore is in TRACKING state
+  bool          _arSessionReady = false;
   String        _statusText   = 'Inițializare ARCore...';
+  // Debug overlay fields
+  int           _dbImageCount = -1;   // -1 = unknown
+  String        _camState     = '?';
+  String        _lastEvent    = '';
 
   @override
   void initState() {
@@ -104,58 +85,104 @@ class _ArScanScreenState extends State<ArScanScreen> {
     final posterId = ev['posterId'] as String? ?? '';
 
     if (type == 'ar_ready') {
+      final loaded = ev['imagesLoaded'] as int? ?? 0;
       if (mounted) setState(() {
         _arSessionReady = true;
-        _statusText = 'Îndreptați camera spre poster...';
+        _dbImageCount   = loaded;
+        _statusText     = loaded > 0
+            ? 'Îndreptați camera spre poster... (DB: $loaded imagini)'
+            : 'EROARE: 0 imagini în DB — verifici assets!';
+        _lastEvent = 'ar_ready loaded=$loaded';
+      });
+      return;
+    }
+    if (type == 'camera_state') {
+      if (mounted) setState(() {
+        _camState  = ev['state'] as String? ?? '?';
+        _lastEvent = 'camera_state=$_camState';
+      });
+      return;
+    }
+    if (type == 'image_paused') {
+      if (mounted) setState(() {
+        _lastEvent = 'IMAGE PAUSED: $posterId (seen, moving to 3D)';
+        _statusText = 'Poster văzut! Mișcă puțin camera pentru tracking 3D...';
       });
       return;
     }
     if (type == 'ar_error') {
       if (mounted) setState(() {
-        _statusText = 'ARCore indisponibil: ${ev['message'] ?? ''}';
+        _statusText = 'ARCore eroare: ${ev['message'] ?? ''}';
+        _lastEvent  = 'ar_error: ${ev['message']}';
       });
       return;
     }
     if (type == 'lost') {
-      if (mounted) setState(() { _overlay = null; _showOverlay = false; });
+      if (mounted) setState(() { _trackingActive = false; _lastEvent = 'lost: $posterId'; _statusText = 'Îndreptați camera spre poster...'; });
+      AnthemService().stop();
       return;
     }
 
-    final cx       = (ev['cx']       as num).toDouble();
-    final cy       = (ev['cy']       as num).toDouble();
-    final widthPx  = (ev['widthPx']  as num).toDouble();
-    final heightPx = (ev['heightPx'] as num).toDouble();
-    final angle    = (ev['angle']    as num).toDouble();
-
-    final data = _OverlayData(
-      posterId: posterId, cx: cx, cy: cy,
-      widthPx: widthPx, heightPx: heightPx, angleDeg: angle,
-    );
-
-    // Always update overlay position data
-    if (mounted) setState(() => _overlay = data);
-
+    // detected / updated — GL renders the actual poster overlay natively
     if (type == 'detected' || type == 'updated') {
-      if (!_dialogShown) {
+      if (mounted) setState(() {
+        _trackingActive = true;
+        _lastEvent      = '$type: $posterId';
+        _statusText     = 'Tracking activ — $posterId';
+      });
+      if (type == 'detected' && !_dialogShown) {
         _dialogShown = true;
         _detectedId  = posterId;
-        if (widget.targetPosterId != null) {
-          // Launched from camera scan — auto-show overlay
-          if (mounted) setState(() { _showOverlay = true; _statusText = 'Tracking activ'; });
-        } else {
+        // Play enemy anthem if this poster is conquered by a rival
+        _maybePlayAnthem(posterId);
+        if (widget.targetPosterId == null) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            _showDetectionSheet(posterId, data);
+            _showDetectionSheet(posterId);
           });
         }
-      } else if (_showOverlay) {
-        // Already showing — just update position (handled by setState above)
       }
+    }
+  }
+
+  // ── Anthem trigger ─────────────────────────────────────────────────────────
+
+  void _maybePlayAnthem(String posterId) {
+    if (!mounted) return;
+    final myTeamId = context.read<AppStateProvider>().teamId;
+    final serverUrl = context.read<SocketProvider>().serverUrl;
+    // Fetch territory fresh from backend — don't rely on in-memory cache
+    _fetchAndPlayAnthem(serverUrl: serverUrl, posterId: posterId, myTeamId: myTeamId);
+  }
+
+  Future<void> _fetchAndPlayAnthem({
+    required String serverUrl,
+    required String posterId,
+    required String myTeamId,
+  }) async {
+    try {
+      final resp = await http.get(Uri.parse('$serverUrl/api/territory'))
+          .timeout(const Duration(seconds: 5));
+      if (resp.statusCode != 200) return;
+      final Map<String, dynamic> all =
+          jsonDecode(resp.body) as Map<String, dynamic>;
+      final posterData = all[posterId] as Map<String, dynamic>?;
+      final dominant = posterData?['dominant'] as String?;
+      if (dominant != null && dominant != myTeamId) {
+        debugPrint('[Anthem] Poster $posterId conquered by $dominant — playing anthem');
+        await AnthemService().playAnthem(
+          serverUrl: serverUrl,
+          enemyTeamId: dominant,
+          myTeamId: myTeamId,
+        );
+      }
+    } catch (e) {
+      debugPrint('[Anthem] _fetchAndPlayAnthem error: $e');
     }
   }
 
   // ── Detection bottom-sheet ─────────────────────────────────────────────────
 
-  void _showDetectionSheet(String posterId, _OverlayData data) {
+  void _showDetectionSheet(String posterId) {
     final poster = _kPosters.firstWhere(
       (p) => p.id == posterId,
       orElse: () => _Poster(posterId, posterId),
@@ -170,17 +197,19 @@ class _ArScanScreenState extends State<ArScanScreen> {
           Navigator.pop(context);
           Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => BattleScreenPlaceholder(posterId: posterId)),
+            MaterialPageRoute(builder: (_) => BattleCanvasScreen(posterId: posterId)),
           );
         },
         onViewAR: () {
           Navigator.pop(context);
-          if (mounted) {
-            setState(() {
-              _showOverlay = true;
-              _overlay = data;
-            });
-          }
+          if (mounted) setState(() => _statusText = 'Tracking activ — $posterId');
+        },
+        onStickers: () {
+          Navigator.pop(context);
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const StickerGeneratorScreen()),
+          );
         },
       ),
     ).whenComplete(() => _dialogShown = false);
@@ -194,33 +223,40 @@ class _ArScanScreenState extends State<ArScanScreen> {
     if (_arInitDone) return;
     _arInitDone = true;
 
-    final Map<String, Uint8List> images = {};
-    final Map<String, double>    widths = {};
-
-    // If launched with a specific poster, only load that one for faster DB compile
+    // Only load the target poster or all 10 — images are loaded natively from assets
     final target = widget.targetPosterId;
     final postersToLoad = target != null
         ? _kPosters.where((p) => p.id == target).toList()
         : _kPosters;
 
+    final ids    = postersToLoad.map((p) => p.id).toList();
+    final widths = { for (final p in postersToLoad) p.id: p.physicalWidthM };
+
+    // Build per-poster texture map: check cache for every poster
+    final cacheDir = await getTemporaryDirectory();
+    final texturePaths = <String, String>{};
     for (final p in postersToLoad) {
-      try {
-        final raw = (await rootBundle.load('assets/posters/${p.id}.png'))
-            .buffer
-            .asUint8List();
-        final resized = await compute(_resizeForAR, raw);
-        images[p.id] = resized;
-        widths[p.id] = p.physicalWidthM;
-      } catch (_) {}
+      // Prefer explicitly passed path (from VIEW AR button)
+      if (widget.textureFilePath != null && p.id == widget.targetPosterId) {
+        texturePaths[p.id] = widget.textureFilePath!;
+        debugPrint('[AR] texture for ${p.id}: explicit path');
+        continue;
+      }
+      final cached = File('${cacheDir.path}/ar_texture_${p.id}.png');
+      if (await cached.exists()) {
+        texturePaths[p.id] = cached.path;
+        debugPrint('[AR] texture for ${p.id}: cached at ${cached.path}');
+      }
     }
+    debugPrint('[AR] _initAR: ${ids.length} poster(s), ${texturePaths.length} custom texture(s)');
 
     try {
       await _method.invokeMethod<void>('initialize', {
-        'images': images,
+        'posterIds': ids,
         'widths': widths,
+        if (texturePaths.isNotEmpty) 'texturePaths': texturePaths,
       });
-      // invokeMethod returns once native session is started — update status here
-      // instead of waiting for EventChannel (which has an async onListen race)
+      debugPrint('[AR] invokeMethod returned — session thread spawned');
       if (mounted) {
         setState(() {
           _arSessionReady = true;
@@ -228,7 +264,7 @@ class _ArScanScreenState extends State<ArScanScreen> {
         });
       }
     } on PlatformException catch (e) {
-      debugPrint('AR init error: $e');
+      debugPrint('[AR] init error: $e');
       if (mounted) setState(() => _statusText = 'Eroare AR: ${e.message}');
     }
   }
@@ -252,9 +288,7 @@ class _ArScanScreenState extends State<ArScanScreen> {
             child: _buildPlatformView(),
           ),
 
-          // ── AR-tracked poster overlay (only when ARCore fires position data) ────
-          if (_showOverlay && _overlay != null)
-            _PosterOverlay(data: _overlay!),
+          // GL renders the poster overlay natively — no Flutter widget needed here
 
           // ── Top bar ────────────────────────────────────────────────────────
           Positioned(
@@ -279,12 +313,9 @@ class _ArScanScreenState extends State<ArScanScreen> {
                       ),
                     ),
                     const Spacer(),
-                    if (_showOverlay)
+                    if (_trackingActive)
                       TextButton(
-                        onPressed: () => setState(() {
-                          _showOverlay = false;
-                          _overlay = null;
-                        }),
+                        onPressed: () => setState(() => _trackingActive = false),
                         child: const Text('HIDE AR', style: TextStyle(color: Colors.cyanAccent)),
                       ),
                   ],
@@ -294,7 +325,7 @@ class _ArScanScreenState extends State<ArScanScreen> {
           ),
 
           // ── Scan hint / status ──────────────────────────────────────────────
-          if (!_showOverlay || _overlay == null)
+          if (!_trackingActive)
             Positioned(
               bottom: 40,
               left: 0, right: 0,
@@ -302,6 +333,26 @@ class _ArScanScreenState extends State<ArScanScreen> {
                 child: _ScanHint(
                   text: _statusText,
                   scanning: !_arSessionReady,
+                ),
+              ),
+            ),
+
+          // ── Debug overlay (visible while tracking not active) ───────────
+          if (!_trackingActive)
+            Positioned(
+              bottom: 100,
+              left: 12, right: 12,
+              child: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.75),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  'DB: ${_dbImageCount < 0 ? '?' : _dbImageCount} img  |  '
+                  'Cam: $_camState\n'
+                  'Last: $_lastEvent',
+                  style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontFamily: 'monospace'),
                 ),
               ),
             ),
@@ -333,57 +384,19 @@ class _ArScanScreenState extends State<ArScanScreen> {
   }
 }
 
-// ── Poster overlay widget ─────────────────────────────────────────────────────
-
-class _PosterOverlay extends StatelessWidget {
-  final _OverlayData data;
-  const _PosterOverlay({required this.data});
-
-  @override
-  Widget build(BuildContext context) {
-    final left = data.cx - data.widthPx / 2;
-    final top  = data.cy - data.heightPx / 2;
-
-    return Positioned(
-      left: left,
-      top:  top,
-      width:  data.widthPx,
-      height: data.heightPx,
-      child: Transform.rotate(
-        angle: data.angleDeg * pi / 180,
-        child: Opacity(
-          opacity: 0.88,
-          child: Image.asset(
-            'assets/posters/${data.posterId}.png',
-            fit: BoxFit.fill,
-            errorBuilder: (_, __, ___) => Container(
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.cyanAccent, width: 2),
-                color: Colors.black45,
-              ),
-              child: Center(
-                child: Text(data.posterId,
-                    style: const TextStyle(color: Colors.white)),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 // ── Detection bottom-sheet widget ─────────────────────────────────────────────
 
 class _DetectionSheet extends StatelessWidget {
   final _Poster poster;
   final VoidCallback onEnterBattle;
   final VoidCallback onViewAR;
+  final VoidCallback onStickers;
 
   const _DetectionSheet({
     required this.poster,
     required this.onEnterBattle,
     required this.onViewAR,
+    required this.onStickers,
   });
 
   @override
@@ -475,6 +488,16 @@ class _DetectionSheet extends StatelessWidget {
               ),
             ],
           ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: _SheetButton(
+              label: 'AI STICKERE',
+              icon: Icons.auto_awesome,
+              color: const Color(0xFF9D00FF),
+              onTap: onStickers,
+            ),
+          ),
           const SizedBox(height: 8),
         ],
       ),
@@ -520,47 +543,6 @@ class _SheetButton extends StatelessWidget {
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-// ── Centered poster overlay (shown immediately, before ARCore tracks) ─────────
-
-class _CenteredPosterOverlay extends StatelessWidget {
-  final String posterId;
-  const _CenteredPosterOverlay({required this.posterId});
-
-  @override
-  Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-    final w = size.width * 0.75;
-    final h = w * 1.4;
-    return Positioned(
-      left: (size.width - w) / 2,
-      top: (size.height - h) / 2,
-      width: w,
-      height: h,
-      child: Opacity(
-        opacity: 0.85,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: Image.asset(
-            'assets/posters/$posterId.png',
-            fit: BoxFit.fill,
-            errorBuilder: (_, __, ___) => Container(
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.cyanAccent, width: 2),
-                color: Colors.black54,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Center(
-                child: Text(posterId,
-                    style: const TextStyle(color: Colors.white, fontSize: 16)),
-              ),
-            ),
-          ),
         ),
       ),
     );

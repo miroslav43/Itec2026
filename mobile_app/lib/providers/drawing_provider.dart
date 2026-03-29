@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import '../models/stroke_model.dart';
+import '../models/sticker_model.dart';
 import '../services/player_stats_service.dart';
 import '../theme/app_theme.dart';
 
@@ -16,6 +17,9 @@ class DrawingProvider extends ChangeNotifier {
   
   // All local strokes (for immediate display)
   final List<Stroke> _localStrokes = [];
+
+  // Placed stickers on this canvas
+  final List<PlacedSticker> _placedStickers = [];
   
   // Predefined colors
   final List<Color> availableColors = [
@@ -39,6 +43,7 @@ class DrawingProvider extends ChangeNotifier {
   bool get isDrawing => _isDrawing;
   List<StrokePoint> get currentPoints => _currentPoints;
   List<Stroke> get localStrokes => _localStrokes;
+  List<PlacedSticker> get placedStickers => _placedStickers;
   
   void setColor(Color color) {
     _currentColor = color;
@@ -128,7 +133,26 @@ class DrawingProvider extends ChangeNotifier {
     _localStrokes.clear();
     notifyListeners();
   }
-  
+
+  void addPlacedSticker(PlacedSticker sticker) {
+    _placedStickers.add(sticker);
+    notifyListeners();
+  }
+
+  void updateStickerPosition(String uid, double x, double y) {
+    final idx = _placedStickers.indexWhere((s) => s.uid == uid);
+    if (idx >= 0) {
+      _placedStickers[idx].x = x;
+      _placedStickers[idx].y = y;
+      notifyListeners();
+    }
+  }
+
+  void removePlacedSticker(String uid) {
+    _placedStickers.removeWhere((s) => s.uid == uid);
+    notifyListeners();
+  }
+
   void reset() {
     _currentColor = AppTheme.neonCyan;
     _brushSize = PlayerStatsService.brushSizeForLevel;
@@ -136,6 +160,7 @@ class DrawingProvider extends ChangeNotifier {
     _isDrawing = false;
     _currentPoints = [];
     _localStrokes.clear();
+    _placedStickers.clear();
     notifyListeners();
   }
 }

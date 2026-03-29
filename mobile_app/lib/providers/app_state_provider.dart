@@ -17,6 +17,9 @@ class AppStateProvider extends ChangeNotifier {
   // Territory state
   Territory? _territory;
   int _userCount = 0;
+
+  // Per-poster conquest state (populated as battles happen)
+  final Map<String, Territory> _posterTerritories = {};
   
   // Poster detection state
   bool _isPosterDetected = false;
@@ -31,6 +34,7 @@ class AppStateProvider extends ChangeNotifier {
   Poster? get currentPoster => _currentPoster;
   Territory? get territory => _territory;
   int get userCount => _userCount;
+  Map<String, Territory> get posterTerritories => Map.unmodifiable(_posterTerritories);
   bool get isPosterDetected => _isPosterDetected;
   String? get detectedPosterId => _detectedPosterId;
   
@@ -79,6 +83,11 @@ class AppStateProvider extends ChangeNotifier {
   
   void setTerritory(Territory territory) {
     _territory = territory;
+    notifyListeners();
+  }
+
+  void updatePosterTerritory(String posterId, Territory territory) {
+    _posterTerritories[posterId] = territory;
     notifyListeners();
   }
   

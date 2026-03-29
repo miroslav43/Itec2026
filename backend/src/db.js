@@ -24,6 +24,40 @@ async function initDB() {
       is_custom BOOLEAN DEFAULT FALSE,
       created_at TIMESTAMP DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS stickers (
+      id VARCHAR(50) PRIMARY KEY,
+      prompt TEXT NOT NULL,
+      creator_id VARCHAR(100),
+      image_base64 TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS map_pins (
+      poster_id VARCHAR(50) PRIMARY KEY,
+      x DOUBLE PRECISION NOT NULL,
+      y DOUBLE PRECISION NOT NULL,
+      z DOUBLE PRECISION NOT NULL,
+      nx DOUBLE PRECISION DEFAULT 0,
+      ny DOUBLE PRECISION DEFAULT 1,
+      nz DOUBLE PRECISION DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS territory_state (
+      poster_id VARCHAR(50) PRIMARY KEY,
+      grid_json  TEXT NOT NULL,
+      territory_json TEXT NOT NULL,
+      dominant   VARCHAR(50),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS team_anthems (
+      team_id    VARCHAR(50) PRIMARY KEY,
+      audio_data BYTEA NOT NULL,
+      mime_type  VARCHAR(50) DEFAULT 'audio/mpeg',
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
   `);
   console.log('DB schema ready');
 }

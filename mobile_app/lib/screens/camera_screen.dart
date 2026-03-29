@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:camera/camera.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_state_provider.dart';
@@ -15,6 +16,8 @@ import '../widgets/team_selector.dart';
 import '../widgets/connection_status.dart';
 import 'battle_canvas_screen.dart';
 import 'ar_scan_screen.dart';
+import 'map_screen.dart';
+import 'sticker_generator_screen.dart';
 
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key});
@@ -318,59 +321,194 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     );
   }
 
-  void _showServerSettings() {
-    final socketProvider = context.read<SocketProvider>();
-    final controller = TextEditingController(text: 'http://10.27.252.100:3000');
+  String get _serverUrl => context.read<SocketProvider>().serverUrl;
 
+  Future<void> _deleteAll(String path, String label) async {
+    try {
+      await http.delete(Uri.parse('$_serverUrl$path'))
+          .timeout(const Duration(seconds: 8));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$label — șters!'), duration: const Duration(seconds: 2)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Eroare: $e'), duration: const Duration(seconds: 2)),
+        );
+      }
+    }
+  }
+
+  void _confirmAction(String title, String body, VoidCallback onConfirm) {
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.darkBgSecondary,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF0D1117),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-          side: const BorderSide(color: AppTheme.neonPink, width: 1),
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: AppTheme.neonRed.withOpacity(0.6), width: 1.5),
         ),
-        title: Text('SERVER URL', style: AppTheme.neonTextStyle(color: AppTheme.neonPink, fontSize: 16)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: controller,
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                hintText: 'http://IP:3000',
-                hintStyle: const TextStyle(color: Colors.white38),
-                enabledBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: AppTheme.neonPink.withOpacity(0.5)),
-                ),
-                focusedBorder: const OutlineInputBorder(
-                  borderSide: BorderSide(color: AppTheme.neonPink),
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-            const Text('Schimba IP-ul daca esti pe alta retea', style: TextStyle(color: Colors.white54, fontSize: 12)),
-          ],
-        ),
+        title: Text(title, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+        content: Text(body, style: const TextStyle(color: Colors.white60, fontSize: 13)),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text('ANULEAZA', style: TextStyle(color: Colors.white38)),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context),
+              child: const Text('Anulează', style: TextStyle(color: Colors.white38))),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.neonPink.withOpacity(0.2)),
-            onPressed: () {
-              final url = controller.text.trim();
-              if (url.isNotEmpty) {
-                socketProvider.setServerUrl(url);
-                socketProvider.disconnect();
-                socketProvider.connect();
-              }
-              Navigator.pop(ctx);
-            },
-            child: Text('CONECTEAZA', style: TextStyle(color: AppTheme.neonPink)),
+            onPressed: () { Navigator.pop(context); onConfirm(); },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.neonRed.withOpacity(0.15),
+              foregroundColor: AppTheme.neonRed,
+              side: BorderSide(color: AppTheme.neonRed.withOpacity(0.6)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            child: const Text('CONFIRMĂ', style: TextStyle(fontWeight: FontWeight.bold)),
           ),
         ],
+      ),
+    );
+  }
+
+  void _showSettings() {
+    final socketProvider = context.read<SocketProvider>();
+    final urlCtrl = TextEditingController(text: socketProvider.serverUrl);
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setSt) => Container(
+          margin: const EdgeInsets.all(12),
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0D1117),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: AppTheme.neonPink.withOpacity(0.5), width: 1.5),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(children: [
+                Icon(Icons.settings, color: AppTheme.neonPink, size: 20),
+                const SizedBox(width: 8),
+                Text('SETĂRI', style: AppTheme.neonTextStyle(color: AppTheme.neonPink, fontSize: 17)),
+              ]),
+              const SizedBox(height: 20),
+
+              // ── Server URL ──────────────────────────────────────────
+              Text('URL Server', style: TextStyle(color: Colors.white54, fontSize: 11, letterSpacing: 1)),
+              const SizedBox(height: 6),
+              Row(children: [
+                Expanded(
+                  child: TextField(
+                    controller: urlCtrl,
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    decoration: InputDecoration(
+                      hintText: 'http://IP:3000',
+                      hintStyle: const TextStyle(color: Colors.white24),
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      filled: true,
+                      fillColor: Colors.white.withOpacity(0.05),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(color: AppTheme.neonPink.withOpacity(0.4)),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(color: AppTheme.neonPink.withOpacity(0.3)),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(color: AppTheme.neonPink, width: 1.5),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: () {
+                    final url = urlCtrl.text.trim();
+                    if (url.isNotEmpty) {
+                      socketProvider.setServerUrl(url);
+                      socketProvider.disconnect();
+                      socketProvider.connect();
+                    }
+                    Navigator.pop(ctx);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.neonPink.withOpacity(0.15),
+                    foregroundColor: AppTheme.neonPink,
+                    side: BorderSide(color: AppTheme.neonPink.withOpacity(0.6)),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  child: const Text('OK', style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ]),
+
+              const SizedBox(height: 24),
+              Divider(color: Colors.white12),
+              const SizedBox(height: 16),
+
+              Text('ADMINISTRARE DATE', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1.5)),
+              const SizedBox(height: 12),
+
+              // ── Delete stickers ─────────────────────────────────────
+              _SettingsTile(
+                icon: Icons.auto_awesome,
+                color: AppTheme.neonPurple,
+                label: 'Șterge toate stickerele AI',
+                subtitle: 'Elimină toate imaginile generate din librărie',
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _confirmAction(
+                    'Șterge stickerele?',
+                    'Toate stickerele generate vor fi șterse permanent.',
+                    () => _deleteAll('/api/stickers', 'Stickere'),
+                  );
+                },
+              ),
+              const SizedBox(height: 10),
+
+              // ── Delete custom posters ───────────────────────────────
+              _SettingsTile(
+                icon: Icons.image_not_supported,
+                color: AppTheme.neonCyan,
+                label: 'Șterge posterele custom',
+                subtitle: 'Elimină toate posterele adăugate manual',
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _confirmAction(
+                    'Șterge posterele custom?',
+                    'Toate posterele custom vor fi șterse permanent.',
+                    () => _deleteAll('/api/custom-posters', 'Postere custom'),
+                  );
+                },
+              ),
+              const SizedBox(height: 10),
+
+              // ── Reset battles ───────────────────────────────────────
+              _SettingsTile(
+                icon: Icons.restart_alt,
+                color: AppTheme.neonRed,
+                label: 'Resetează toate bătăliile',
+                subtitle: 'Șterge teritoriile cucerite — se poate lupta din nou',
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _confirmAction(
+                    'Resetează bătăliile?',
+                    'Toate teritoriile cucerite vor fi resetate. Posterele vor putea fi recucerite.',
+                    () => _deleteAll('/api/territory/reset', 'Bătălii resetate'),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -686,10 +824,28 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                 onTap: _showPosterSelector,
               ),
               _buildControlButton(
-                icon: Icons.wifi,
-                label: 'SERVER',
+                icon: Icons.map,
+                label: 'HARTA 3D',
+                color: AppTheme.neonGreen,
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const MapScreen()),
+                ),
+              ),
+              _buildControlButton(
+                icon: Icons.auto_awesome,
+                label: 'STICKERE',
+                color: AppTheme.neonPurple,
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const StickerGeneratorScreen()),
+                ),
+              ),
+              _buildControlButton(
+                icon: Icons.settings,
+                label: 'SETĂRI',
                 color: AppTheme.neonPink,
-                onTap: _showServerSettings,
+                onTap: _showSettings,
               ),
             ],
           ),
@@ -896,6 +1052,60 @@ class ScanOverlayPainter extends CustomPainter {
   @override
   bool shouldRepaint(ScanOverlayPainter oldDelegate) {
     return oldDelegate.isDetected != isDetected;
+  }
+}
+
+class _SettingsTile extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String label;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  const _SettingsTile({
+    required this.icon,
+    required this.color,
+    required this.label,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.07),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withOpacity(0.35), width: 1),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: color, size: 22),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label,
+                      style: TextStyle(
+                          color: color,
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 2),
+                  Text(subtitle,
+                      style: const TextStyle(
+                          color: Colors.white38, fontSize: 11)),
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_right, color: color.withOpacity(0.5), size: 18),
+          ],
+        ),
+      ),
+    );
   }
 }
 
