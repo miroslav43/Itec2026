@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
@@ -12,6 +13,7 @@ class AnthemService {
   final AudioPlayer _player = AudioPlayer();
   String? _currentTeamId;
   bool _isPlaying = false;
+  StreamSubscription? _completeSub;
 
   bool get isPlaying => _isPlaying;
   String? get currentTeamId => _currentTeamId;
@@ -83,14 +85,48 @@ class AnthemService {
 
       _currentTeamId = enemyTeamId;
       _isPlaying = true;
-      await _player.play(DeviceFileSource(file.path));
-      _player.onPlayerComplete.listen((_) {
+      // Cancel previous listener before adding new one
+      await _completeSub?.cancel();
+      _completeSub = _player.onPlayerComplete.listen((_) {
         _isPlaying = false;
         _currentTeamId = null;
       });
+      await _player.play(DeviceFileSource(file.path));
       debugPrint('[Anthem] Playing anthem for team $enemyTeamId');
     } catch (e) {
       debugPrint('[Anthem] playAnthem error: $e');
+      _isPlaying = false;
+      _currentTeamId = null;
+    }
+  }
+
+  /// Play YOUR OWN team's anthem when you conquer a territory.
+  Future<void> playCelebrationAnthem({
+    required String serverUrl,
+    required String teamId,
+  }) async {
+    await stop();
+    try {
+      final resp = await http
+          .get(Uri.parse('$serverUrl/api/anthem/$teamId'))
+          .timeout(const Duration(seconds: 15));
+      if (resp.statusCode != 200) return;
+
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/anthem_own_$teamId.mp3');
+      await file.writeAsBytes(resp.bodyBytes);
+
+      _currentTeamId = teamId;
+      _isPlaying = true;
+      await _completeSub?.cancel();
+      _completeSub = _player.onPlayerComplete.listen((_) {
+        _isPlaying = false;
+        _currentTeamId = null;
+      });
+      await _player.play(DeviceFileSource(file.path));
+      debugPrint('[Anthem] 🎺 Celebration anthem for team $teamId!');
+    } catch (e) {
+      debugPrint('[Anthem] playCelebrationAnthem error: $e');
       _isPlaying = false;
       _currentTeamId = null;
     }
@@ -105,6 +141,7 @@ class AnthemService {
   }
 
   void dispose() {
+    _completeSub?.cancel();
     _player.dispose();
   }
 }

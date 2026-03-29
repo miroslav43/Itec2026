@@ -35,10 +35,16 @@ dependencies:
   # Audio & Haptics
   vibration: ^1.8.4
   audioplayers: ^5.2.1
-  file_picker: ^8.0.5
+  file_picker: ^5.3.0
   
   # 3D Map viewer
   model_viewer_plus: ^1.7.2
+
+  # Fonts
+  google_fonts: ^6.1.0
+
+  # Sensors (gyroscope / accelerometer)
+  sensors_plus: ^4.0.2
 
   # Utilities
   uuid: ^4.2.1

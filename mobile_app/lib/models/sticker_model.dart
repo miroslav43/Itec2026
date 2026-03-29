@@ -6,6 +6,7 @@ class StickerItem {
   final String? creatorId;
   final DateTime createdAt;
   final Uint8List imageBytes;
+  final bool isGif;
 
   const StickerItem({
     required this.id,
@@ -13,7 +14,13 @@ class StickerItem {
     this.creatorId,
     required this.createdAt,
     required this.imageBytes,
+    this.isGif = false,
   });
+
+  /// Auto-detect GIF by magic bytes (GIF87a / GIF89a)
+  static bool detectGif(Uint8List bytes) =>
+      bytes.length > 3 &&
+      bytes[0] == 0x47 && bytes[1] == 0x49 && bytes[2] == 0x46;
 }
 
 class PlacedSticker {

@@ -21,6 +21,7 @@ class _StickerGeneratorScreenState extends State<StickerGeneratorScreen>
   final TextEditingController _promptCtrl = TextEditingController();
   bool _generating = false;
   bool _loadingLib = false;
+  bool _isGifMode = false;
   StickerItem? _generated;
   List<StickerItem> _library = [];
   String? _errorMsg;
@@ -49,7 +50,9 @@ class _StickerGeneratorScreenState extends State<StickerGeneratorScreen>
     final prompt = _promptCtrl.text.trim();
     if (prompt.isEmpty) return;
     setState(() { _generating = true; _errorMsg = null; _generated = null; });
-    final result = await AiImageService.generateSticker(prompt: prompt);
+    final result = _isGifMode
+        ? await AiImageService.generateGifSticker(prompt: prompt)
+        : await AiImageService.generateSticker(prompt: prompt);
     if (!mounted) return;
     if (result == null) {
       setState(() { _generating = false; _errorMsg = 'Generarea a eșuat. Verifică conexiunea.'; });
@@ -138,6 +141,23 @@ class _StickerGeneratorScreenState extends State<StickerGeneratorScreen>
               style: TextStyle(color: Colors.white70, fontSize: 13,
                   letterSpacing: 0.5)),
           const SizedBox(height: 8),
+          // GIF / Image toggle
+          Row(
+            children: [
+              _ModeChip(
+                label: '🖼 Imagine',
+                selected: !_isGifMode,
+                onTap: () => setState(() => _isGifMode = false),
+              ),
+              const SizedBox(width: 8),
+              _ModeChip(
+                label: '✨ GIF animat',
+                selected: _isGifMode,
+                onTap: () => setState(() => _isGifMode = true),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
           TextField(
             controller: _promptCtrl,
             style: const TextStyle(color: Colors.white, fontSize: 15),
@@ -176,7 +196,9 @@ class _StickerGeneratorScreenState extends State<StickerGeneratorScreen>
                       child: CircularProgressIndicator(
                           color: Colors.white, strokeWidth: 2))
                   : const Icon(Icons.auto_awesome, size: 20),
-              label: Text(_generating ? 'Se generează...' : 'GENEREAZĂ',
+              label: Text(_generating
+                  ? (_isGifMode ? 'Se animă...' : 'Se generează...')
+                  : (_isGifMode ? 'GENEREAZĂ GIF' : 'GENEREAZĂ'),
                   style: const TextStyle(
                       fontWeight: FontWeight.bold, letterSpacing: 1.5)),
               style: ElevatedButton.styleFrom(
@@ -288,6 +310,44 @@ class _StickerGeneratorScreenState extends State<StickerGeneratorScreen>
   }
 }
 
+// ── Mode chip ────────────────────────────────────────────────────────────────
+
+class _ModeChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  const _ModeChip({required this.label, required this.selected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        decoration: BoxDecoration(
+          color: selected
+              ? AppTheme.neonPurple.withOpacity(0.25)
+              : Colors.white.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: selected
+                ? AppTheme.neonPurple
+                : Colors.white24,
+            width: selected ? 1.5 : 1,
+          ),
+        ),
+        child: Text(label,
+            style: TextStyle(
+              color: selected ? AppTheme.neonPurple : Colors.white38,
+              fontSize: 12,
+              fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+            )),
+      ),
+    );
+  }
+}
+
 // ── Sticker card ─────────────────────────────────────────────────────────────
 
 class _StickerCard extends StatelessWidget {
@@ -302,35 +362,61 @@ class _StickerCard extends StatelessWidget {
       onTap: onTap,
       child: Container(
         decoration: BoxDecoration(
-          color: AppTheme.neonPurple.withOpacity(0.07),
+          color: sticker.isGif
+              ? AppTheme.neonCyan.withOpacity(0.07)
+              : AppTheme.neonPurple.withOpacity(0.07),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-              color: AppTheme.neonPurple.withOpacity(0.35), width: 1),
+              color: sticker.isGif
+                  ? AppTheme.neonCyan.withOpacity(0.5)
+                  : AppTheme.neonPurple.withOpacity(0.35),
+              width: 1),
         ),
-        child: Column(
+        child: Stack(
           children: [
-            Expanded(
-              child: ClipRRect(
-                borderRadius:
-                    const BorderRadius.vertical(top: Radius.circular(11)),
-                child: Image.memory(
-                  sticker.imageBytes,
-                  fit: BoxFit.cover,
-                  width: double.infinity,
-                  errorBuilder: (_, __, ___) => const Icon(
-                      Icons.broken_image, color: Colors.white24),
+            Column(
+              children: [
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius:
+                        const BorderRadius.vertical(top: Radius.circular(11)),
+                    child: Image.memory(
+                      sticker.imageBytes,
+                      fit: BoxFit.cover,
+                      width: double.infinity,
+                      gaplessPlayback: false,
+                      errorBuilder: (_, __, ___) => const Icon(
+                          Icons.broken_image, color: Colors.white24),
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                  child: Text(
+                    sticker.prompt,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white54, fontSize: 9),
+                  ),
+                ),
+              ],
+            ),
+            if (sticker.isGif)
+              Positioned(
+                top: 4, right: 4,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: AppTheme.neonCyan.withOpacity(0.85),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Text('GIF',
+                      style: TextStyle(
+                          color: Colors.black,
+                          fontSize: 8,
+                          fontWeight: FontWeight.bold)),
                 ),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-              child: Text(
-                sticker.prompt,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Colors.white54, fontSize: 9),
-              ),
-            ),
           ],
         ),
       ),

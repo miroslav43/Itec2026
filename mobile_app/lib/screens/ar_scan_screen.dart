@@ -11,6 +11,7 @@ import 'package:provider/provider.dart';
 import '../providers/app_state_provider.dart';
 import '../providers/socket_provider.dart';
 import '../services/anthem_service.dart';
+import '../theme/app_theme.dart';
 import 'battle_canvas_screen.dart';
 import 'sticker_generator_screen.dart';
 
@@ -159,21 +160,49 @@ class _ArScanScreenState extends State<ArScanScreen> {
     required String posterId,
     required String myTeamId,
   }) async {
+    debugPrint('[Anthem] Checking territory for $posterId (myTeam=$myTeamId, server=$serverUrl)');
     try {
       final resp = await http.get(Uri.parse('$serverUrl/api/territory'))
           .timeout(const Duration(seconds: 5));
+      debugPrint('[Anthem] Territory status: ${resp.statusCode}');
       if (resp.statusCode != 200) return;
       final Map<String, dynamic> all =
           jsonDecode(resp.body) as Map<String, dynamic>;
       final posterData = all[posterId] as Map<String, dynamic>?;
       final dominant = posterData?['dominant'] as String?;
-      if (dominant != null && dominant != myTeamId) {
-        debugPrint('[Anthem] Poster $posterId conquered by $dominant — playing anthem');
-        await AnthemService().playAnthem(
-          serverUrl: serverUrl,
-          enemyTeamId: dominant,
-          myTeamId: myTeamId,
-        );
+      debugPrint('[Anthem] Dominant for $posterId = $dominant');
+      if (dominant == null) {
+        debugPrint('[Anthem] No dominant team — poster not conquered yet');
+        return;
+      }
+      if (dominant == myTeamId) {
+        debugPrint('[Anthem] Poster is YOUR territory — no anthem');
+        return;
+      }
+      debugPrint('[Anthem] Enemy territory ($dominant) — fetching anthem...');
+      final existed = await AnthemService.anthemExists(
+        serverUrl: serverUrl,
+        teamId: dominant,
+      );
+      if (!existed) {
+        debugPrint('[Anthem] No anthem set for team $dominant');
+        return;
+      }
+      await AnthemService().playAnthem(
+        serverUrl: serverUrl,
+        enemyTeamId: dominant,
+        myTeamId: myTeamId,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Row(children: [
+            const Icon(Icons.music_note, color: Colors.white, size: 16),
+            const SizedBox(width: 8),
+            Text('Teritoriu inamic ($dominant) — imn activ!'),
+          ]),
+          backgroundColor: Colors.red.shade800,
+          duration: const Duration(seconds: 3),
+        ));
       }
     } catch (e) {
       debugPrint('[Anthem] _fetchAndPlayAnthem error: $e');
@@ -290,36 +319,49 @@ class _ArScanScreenState extends State<ArScanScreen> {
 
           // GL renders the poster overlay natively — no Flutter widget needed here
 
-          // ── Top bar ────────────────────────────────────────────────────────
+          // ── Top bar ────────────────────────────────────────────────────────────
           Positioned(
             top: 0, left: 0, right: 0,
             child: SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                child: Row(
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.arrow_back_ios, color: Colors.white),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                    const SizedBox(width: 8),
-                    const Text(
-                      'AR POSTER SCAN',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 2,
-                      ),
-                    ),
-                    const Spacer(),
-                    if (_trackingActive)
-                      TextButton(
-                        onPressed: () => setState(() => _trackingActive = false),
-                        child: const Text('HIDE AR', style: TextStyle(color: Colors.cyanAccent)),
-                      ),
-                  ],
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                    colors: [Colors.black.withOpacity(0.75), Colors.transparent],
+                  ),
                 ),
+                child: Row(children: [
+                  GestureDetector(
+                    onTap: () => Navigator.pop(context),
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: AppTheme.neonBoxDecoration(
+                          color: AppTheme.neonPink, borderRadius: 4, glowIntensity: 0.2),
+                      child: const Icon(Icons.arrow_back, color: AppTheme.neonPink, size: 18),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('🗺  HARTA REALITĂȚII',
+                        style: AppTheme.cinzel(
+                            fontSize: 8, color: AppTheme.gold.withOpacity(0.55), letterSpacing: 2)),
+                    Text('AR POSTER SCAN',
+                        style: AppTheme.neonTextStyle(color: AppTheme.gold, fontSize: 14)),
+                  ]),
+                  const Spacer(),
+                  if (_trackingActive)
+                    GestureDetector(
+                      onTap: () => setState(() => _trackingActive = false),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: AppTheme.panelDecoration(borderColor: AppTheme.neonGreen),
+                        child: Text('ASCUNDE AR',
+                            style: AppTheme.cinzel(
+                                fontSize: 9, color: AppTheme.neonGreen, letterSpacing: 1)),
+                      ),
+                    ),
+                ]),
               ),
             ),
           ),
@@ -337,22 +379,21 @@ class _ArScanScreenState extends State<ArScanScreen> {
               ),
             ),
 
-          // ── Debug overlay (visible while tracking not active) ───────────
+          // ── Debug overlay (visible while tracking not active) ─────────────
           if (!_trackingActive)
             Positioned(
               bottom: 100,
               left: 12, right: 12,
               child: Container(
                 padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.75),
-                  borderRadius: BorderRadius.circular(8),
-                ),
+                decoration: AppTheme.panelDecoration(),
                 child: Text(
-                  'DB: ${_dbImageCount < 0 ? '?' : _dbImageCount} img  |  '
+                  '⚔ DB: ${_dbImageCount < 0 ? '?' : _dbImageCount} blazoane  |  '
                   'Cam: $_camState\n'
-                  'Last: $_lastEvent',
-                  style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontFamily: 'monospace'),
+                  'Ultim semnal: $_lastEvent',
+                  style: AppTheme.cinzel(
+                      fontSize: 9, color: AppTheme.neonGreen,
+                      letterSpacing: 0.5, weight: FontWeight.normal),
                 ),
               ),
             ),
@@ -402,105 +443,70 @@ class _DetectionSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.all(16),
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0D1117),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.cyanAccent.withOpacity(0.6), width: 1.5),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.cyanAccent.withOpacity(0.15),
-            blurRadius: 20,
-            spreadRadius: 2,
+      margin: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+      decoration: AppTheme.panelDecoration(borderColor: AppTheme.gold),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          width: 36, height: 3,
+          decoration: BoxDecoration(
+            color: AppTheme.gold.withOpacity(0.35),
+            borderRadius: BorderRadius.circular(2),
           ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
+        ),
+        const SizedBox(height: 16),
+        Row(children: [
           Container(
-            width: 40, height: 4,
+            padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: Colors.white24,
-              borderRadius: BorderRadius.circular(2),
+              color: AppTheme.neonGreen.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: AppTheme.neonGreen.withOpacity(0.45)),
             ),
+            child: Text('🏰', style: const TextStyle(fontSize: 24)),
           ),
-          const SizedBox(height: 16),
-          Row(
+          const SizedBox(width: 14),
+          Expanded(child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: Colors.cyanAccent.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.cyanAccent.withOpacity(0.4)),
-                ),
-                child: const Icon(Icons.qr_code_scanner, color: Colors.cyanAccent, size: 28),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'POSTER DETECTAT',
-                      style: TextStyle(
-                        color: Colors.cyanAccent,
-                        fontSize: 11,
-                        letterSpacing: 2,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      poster.label,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+              Text('⚔  CETATE DESCOPERITĂ',
+                  style: AppTheme.cinzel(
+                      fontSize: 9, color: AppTheme.neonGreen, letterSpacing: 2)),
+              const SizedBox(height: 5),
+              Text(poster.label.toUpperCase(),
+                  style: AppTheme.cinzel(
+                      fontSize: 16, color: AppTheme.parchment, letterSpacing: 2,
+                      shadows: [Shadow(color: AppTheme.gold.withOpacity(0.5), blurRadius: 8)])),
             ],
+          )),
+        ]),
+        const SizedBox(height: 20),
+        Row(children: [
+          Expanded(child: _SheetButton(
+            label: 'INTRĂ În LUPTĂ',
+            icon: Icons.shield,
+            color: AppTheme.crimson,
+            onTap: onEnterBattle,
+          )),
+          const SizedBox(width: 10),
+          Expanded(child: _SheetButton(
+            label: 'HARTA AR',
+            icon: Icons.map,
+            color: AppTheme.gold,
+            onTap: onViewAR,
+          )),
+        ]),
+        const SizedBox(height: 10),
+        SizedBox(width: double.infinity,
+          child: _SheetButton(
+            label: 'BLAZOANE AI',
+            icon: Icons.auto_awesome,
+            color: AppTheme.neonPurple,
+            onTap: onStickers,
           ),
-          const SizedBox(height: 24),
-          Row(
-            children: [
-              Expanded(
-                child: _SheetButton(
-                  label: 'ENTER BATTLE',
-                  icon: Icons.sports_esports,
-                  color: Colors.redAccent,
-                  onTap: onEnterBattle,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _SheetButton(
-                  label: 'VIEW AR',
-                  icon: Icons.view_in_ar,
-                  color: Colors.cyanAccent,
-                  onTap: onViewAR,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            child: _SheetButton(
-              label: 'AI STICKERE',
-              icon: Icons.auto_awesome,
-              color: const Color(0xFF9D00FF),
-              onTap: onStickers,
-            ),
-          ),
-          const SizedBox(height: 8),
-        ],
-      ),
+        ),
+        const SizedBox(height: 6),
+      ]),
     );
   }
 }
@@ -523,27 +529,20 @@ class _SheetButton extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 14),
+        padding: const EdgeInsets.symmetric(vertical: 13),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.12),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: color.withOpacity(0.5), width: 1.5),
+          color: color.withOpacity(0.15),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: color.withOpacity(0.6), width: 1.5),
+          boxShadow: [BoxShadow(color: color.withOpacity(0.2), blurRadius: 10)],
         ),
-        child: Column(
-          children: [
-            Icon(icon, color: color, size: 26),
-            const SizedBox(height: 6),
-            Text(
-              label,
-              style: TextStyle(
-                color: color,
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 1.5,
-              ),
-            ),
-          ],
-        ),
+        child: Column(children: [
+          Icon(icon, color: color, size: 22),
+          const SizedBox(height: 6),
+          Text(label,
+              style: AppTheme.cinzel(
+                  fontSize: 10, color: color, letterSpacing: 1.5)),
+        ]),
       ),
     );
   }
@@ -562,29 +561,21 @@ class _ScanHint extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-      decoration: BoxDecoration(
-        color: Colors.black54,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: Colors.white24),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (scanning)
-            const SizedBox(
-              width: 16, height: 16,
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+      decoration: AppTheme.panelDecoration(),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        if (scanning)
+          SizedBox(width: 14, height: 14,
               child: CircularProgressIndicator(
-                strokeWidth: 2,
-                valueColor: AlwaysStoppedAnimation<Color>(Colors.cyanAccent),
-              ),
-            )
-          else
-            const Icon(Icons.crop_free, color: Colors.cyanAccent, size: 18),
-          const SizedBox(width: 8),
-          Text(text, style: const TextStyle(color: Colors.white70, fontSize: 13)),
-        ],
-      ),
+                  strokeWidth: 1.8, color: AppTheme.gold))
+        else
+          Text('🗑', style: const TextStyle(fontSize: 16)),
+        const SizedBox(width: 10),
+        Text(text,
+            style: AppTheme.cinzel(
+                fontSize: 11, color: AppTheme.parchment.withOpacity(0.75),
+                letterSpacing: 1, weight: FontWeight.normal)),
+      ]),
     );
   }
 }

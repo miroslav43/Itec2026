@@ -854,10 +854,34 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3000;
 
+async function migrateAnthemsFromDisk() {
+  const ANTHEMS_DIR = path.join(__dirname, '..', 'anthems');
+  if (!fs.existsSync(ANTHEMS_DIR)) return;
+  const files = fs.readdirSync(ANTHEMS_DIR).filter(f => f.endsWith('.mp3'));
+  for (const file of files) {
+    const teamId = path.basename(file, '.mp3');
+    try {
+      const { rows } = await pool.query('SELECT 1 FROM team_anthems WHERE team_id=$1', [teamId]);
+      if (rows.length > 0) continue; // already in DB
+      const buf = fs.readFileSync(path.join(ANTHEMS_DIR, file));
+      await pool.query(
+        `INSERT INTO team_anthems (team_id, audio_data, mime_type, updated_at)
+         VALUES ($1,$2,'audio/mpeg',NOW())
+         ON CONFLICT (team_id) DO UPDATE SET audio_data=$2, updated_at=NOW()`,
+        [teamId, buf]
+      );
+      console.log(`[Anthem] Migrated ${file} → DB (${buf.length} bytes)`);
+    } catch (e) {
+      console.warn(`[Anthem] Migration failed for ${file}:`, e.message);
+    }
+  }
+}
+
 async function startServer() {
   try {
     await initDB();
     await loadCustomPostersFromDB();
+    await migrateAnthemsFromDisk();
   } catch (e) {
     console.warn('DB init failed (continuing without DB):', e.message);
   }

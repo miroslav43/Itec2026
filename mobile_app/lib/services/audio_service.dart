@@ -3,12 +3,15 @@ import 'package:flutter/foundation.dart';
 
 class AudioService {
   static final AudioPlayer _player = AudioPlayer();
+  static final AudioPlayer _sprayPlayer = AudioPlayer();
   static bool _initialized = false;
   static bool _soundEnabled = true;
   
   static Future<void> init() async {
     if (_initialized) return;
     await _player.setReleaseMode(ReleaseMode.stop);
+    await _sprayPlayer.setReleaseMode(ReleaseMode.loop);
+    await _sprayPlayer.setVolume(0.55);
     _initialized = true;
   }
   
@@ -110,7 +113,26 @@ class AudioService {
     }
   }
 
+  static Future<void> startSpraySound() async {
+    if (!_soundEnabled) return;
+    try {
+      await _sprayPlayer.stop();
+      await _sprayPlayer.play(AssetSource('sounds/enemy_erase.wav'));
+    } catch (e) {
+      debugPrint('Error starting spray sound: $e');
+    }
+  }
+
+  static Future<void> stopSpraySound() async {
+    try {
+      await _sprayPlayer.stop();
+    } catch (e) {
+      debugPrint('Error stopping spray sound: $e');
+    }
+  }
+
   static void dispose() {
     _player.dispose();
+    _sprayPlayer.dispose();
   }
 }

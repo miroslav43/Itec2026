@@ -6,6 +6,7 @@ import 'package:camera/camera.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_state_provider.dart';
 import '../providers/socket_provider.dart';
+import '../services/esp32_service.dart';
 import '../services/gpt_vision_service.dart';
 import '../services/haptic_service.dart';
 import '../services/audio_service.dart';
@@ -48,6 +49,8 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     if (mounted) {
       context.read<SocketProvider>().connect();
     }
+    // Auto-connect ESP32 with default IP (background, no error if fails)
+    unawaited(Esp32Service().connect(Esp32Service.defaultIp));
   }
   
   Future<void> _initCamera() async {
@@ -152,103 +155,85 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
           return AlertDialog(
             backgroundColor: AppTheme.darkBgSecondary,
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-              side: const BorderSide(color: AppTheme.neonCyan, width: 1),
+              borderRadius: BorderRadius.circular(4),
+              side: BorderSide(color: AppTheme.gold.withOpacity(0.7), width: 1.5),
             ),
-            title: Text(
-              'POSTER NOU DETECTAT',
-              style: AppTheme.neonTextStyle(color: AppTheme.neonCyan, fontSize: 16),
-            ),
+            title: Text('🏰 CETATE NOUĂ DESCOPERITĂ',
+                style: AppTheme.neonTextStyle(color: AppTheme.gold, fontSize: 14)),
             content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (croppedBytes != null)
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: Image.memory(
-                        croppedBytes,
-                        width: 200,
-                        height: 200,
-                        fit: BoxFit.cover,
-                      ),
-                    ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: nameCtrl,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      labelText: 'Nume afiș',
-                      labelStyle: const TextStyle(color: Colors.white54),
-                      enabledBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: AppTheme.neonCyan.withOpacity(0.4)),
-                      ),
-                      focusedBorder: const OutlineInputBorder(
-                        borderSide: BorderSide(color: AppTheme.neonCyan),
-                      ),
-                    ),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                if (croppedBytes != null)
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: Image.memory(croppedBytes,
+                        width: 200, height: 200, fit: BoxFit.cover),
                   ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: descCtrl,
-                    style: const TextStyle(color: Colors.white),
-                    maxLines: 2,
-                    decoration: InputDecoration(
-                      labelText: 'Descriere (optional)',
-                      labelStyle: const TextStyle(color: Colors.white54),
-                      enabledBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: AppTheme.neonCyan.withOpacity(0.4)),
-                      ),
-                      focusedBorder: const OutlineInputBorder(
-                        borderSide: BorderSide(color: AppTheme.neonCyan),
-                      ),
-                    ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: nameCtrl,
+                  style: AppTheme.cinzel(fontSize: 13, color: AppTheme.parchment, letterSpacing: 1),
+                  decoration: InputDecoration(
+                    labelText: 'Numele cetății',
+                    labelStyle: AppTheme.cinzel(fontSize: 11,
+                        color: AppTheme.parchment.withOpacity(0.4), letterSpacing: 1),
+                    filled: true, fillColor: AppTheme.darkBgTertiary,
+                    enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(4),
+                        borderSide: BorderSide(color: AppTheme.gold.withOpacity(0.3))),
+                    focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(4),
+                        borderSide: BorderSide(color: AppTheme.gold, width: 1.5)),
                   ),
-                ],
-              ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: descCtrl,
+                  style: AppTheme.cinzel(fontSize: 12, color: AppTheme.parchment, letterSpacing: 0.8),
+                  maxLines: 2,
+                  decoration: InputDecoration(
+                    labelText: 'Cronica (opțional)',
+                    labelStyle: AppTheme.cinzel(fontSize: 11,
+                        color: AppTheme.parchment.withOpacity(0.4), letterSpacing: 1),
+                    filled: true, fillColor: AppTheme.darkBgTertiary,
+                    enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(4),
+                        borderSide: BorderSide(color: AppTheme.gold.withOpacity(0.3))),
+                    focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(4),
+                        borderSide: BorderSide(color: AppTheme.gold, width: 1.5)),
+                  ),
+                ),
+              ]),
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx),
-                child: const Text('ANULEAZĂ', style: TextStyle(color: Colors.white38)),
+                child: Text('RETRAGE-TE',
+                    style: AppTheme.cinzel(fontSize: 11,
+                        color: AppTheme.parchment.withOpacity(0.35))),
               ),
               ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.neonCyan.withOpacity(0.2),
-                  foregroundColor: AppTheme.neonCyan,
-                ),
-                onPressed: saving
-                    ? null
-                    : () async {
-                        final name = nameCtrl.text.trim();
-                        if (name.isEmpty) return;
-                        setDialogState(() => saving = true);
-                        final id = await GptVisionService.saveCustomPoster(
-                          name: name,
-                          description: descCtrl.text.trim().isEmpty
-                              ? name
-                              : descCtrl.text.trim(),
-                          imageBytes: croppedBytes ?? Uint8List(0),
-                        );
-                        if (!ctx.mounted) return;
-                        Navigator.pop(ctx);
-                        if (id != null && mounted) {
-                          final imageUrl =
-                              '${GptVisionService.serverUrl}/custom-posters/$id.jpg';
-                          _openBattleCanvas(id,
-                              posterName: name, posterImageUrl: imageUrl);
-                        }
-                      },
+                onPressed: saving ? null : () async {
+                  final name = nameCtrl.text.trim();
+                  if (name.isEmpty) return;
+                  setDialogState(() => saving = true);
+                  final id = await GptVisionService.saveCustomPoster(
+                    name: name,
+                    description: descCtrl.text.trim().isEmpty ? name : descCtrl.text.trim(),
+                    imageBytes: croppedBytes ?? Uint8List(0),
+                  );
+                  if (!ctx.mounted) return;
+                  Navigator.pop(ctx);
+                  if (id != null && mounted) {
+                    final imageUrl = '${GptVisionService.serverUrl}/custom-posters/$id.jpg';
+                    _openBattleCanvas(id, posterName: name, posterImageUrl: imageUrl);
+                  }
+                },
                 child: saving
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: AppTheme.neonCyan,
-                        ),
-                      )
-                    : const Text('ADAUGĂ ÎN BAZA DE DATE'),
+                    ? SizedBox(width: 18, height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.gold))
+                    : Text('ADAUGĂ În CRONICI',
+                        style: AppTheme.cinzel(fontSize: 12, color: AppTheme.goldBright)),
               ),
             ],
           );
@@ -345,25 +330,31 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        backgroundColor: const Color(0xFF0D1117),
+        backgroundColor: AppTheme.darkBgSecondary,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: BorderSide(color: AppTheme.neonRed.withOpacity(0.6), width: 1.5),
+          borderRadius: BorderRadius.circular(4),
+          side: BorderSide(color: AppTheme.neonRed.withOpacity(0.7), width: 1.5),
         ),
-        title: Text(title, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
-        content: Text(body, style: const TextStyle(color: Colors.white60, fontSize: 13)),
+        title: Text(title,
+            style: AppTheme.neonTextStyle(color: AppTheme.neonRed, fontSize: 14)),
+        content: Text(body,
+            style: AppTheme.cinzel(fontSize: 11, color: AppTheme.parchment.withOpacity(0.7),
+                letterSpacing: 0.8, weight: FontWeight.normal)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context),
-              child: const Text('Anulează', style: TextStyle(color: Colors.white38))),
+              child: Text('RETRAGE-TE',
+                  style: AppTheme.cinzel(fontSize: 11,
+                      color: AppTheme.parchment.withOpacity(0.35)))),
           ElevatedButton(
             onPressed: () { Navigator.pop(context); onConfirm(); },
             style: ElevatedButton.styleFrom(
-              backgroundColor: AppTheme.neonRed.withOpacity(0.15),
+              backgroundColor: AppTheme.neonRed.withOpacity(0.2),
               foregroundColor: AppTheme.neonRed,
               side: BorderSide(color: AppTheme.neonRed.withOpacity(0.6)),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
             ),
-            child: const Text('CONFIRMĂ', style: TextStyle(fontWeight: FontWeight.bold)),
+            child: Text('CONFIRMĂ',
+                style: AppTheme.cinzel(fontSize: 12, color: AppTheme.neonRed)),
           ),
         ],
       ),
@@ -373,6 +364,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   void _showSettings() {
     final socketProvider = context.read<SocketProvider>();
     final urlCtrl = TextEditingController(text: socketProvider.serverUrl);
+    final esp32Ctrl = TextEditingController(text: Esp32Service().ip ?? Esp32Service.defaultIp);
 
     showModalBottomSheet(
       context: context,
@@ -380,50 +372,49 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       isScrollControlled: true,
       builder: (_) => StatefulBuilder(
         builder: (ctx, setSt) => Container(
-          margin: const EdgeInsets.all(12),
+          margin: const EdgeInsets.all(10),
           padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
-          decoration: BoxDecoration(
-            color: const Color(0xFF0D1117),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: AppTheme.neonPink.withOpacity(0.5), width: 1.5),
-          ),
+          decoration: AppTheme.panelDecoration(borderColor: AppTheme.neonPink),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(children: [
-                Icon(Icons.settings, color: AppTheme.neonPink, size: 20),
-                const SizedBox(width: 8),
-                Text('SETĂRI', style: AppTheme.neonTextStyle(color: AppTheme.neonPink, fontSize: 17)),
+                const Text('📜', style: TextStyle(fontSize: 18)),
+                const SizedBox(width: 10),
+                Text('PERGAMENTUL SETARILOR',
+                    style: AppTheme.neonTextStyle(color: AppTheme.neonPink, fontSize: 15)),
               ]),
-              const SizedBox(height: 20),
+              const SizedBox(height: 18),
 
-              // ── Server URL ──────────────────────────────────────────
-              Text('URL Server', style: TextStyle(color: Colors.white54, fontSize: 11, letterSpacing: 1)),
+              Text('ADRESA FORTĂREȚEI',
+                  style: AppTheme.cinzel(fontSize: 9,
+                      color: AppTheme.parchment.withOpacity(0.4), letterSpacing: 2)),
               const SizedBox(height: 6),
               Row(children: [
                 Expanded(
                   child: TextField(
                     controller: urlCtrl,
-                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    style: AppTheme.cinzel(fontSize: 12, color: AppTheme.parchment, letterSpacing: 1),
                     decoration: InputDecoration(
                       hintText: 'http://IP:3000',
-                      hintStyle: const TextStyle(color: Colors.white24),
+                      hintStyle: AppTheme.cinzel(fontSize: 11,
+                          color: AppTheme.parchment.withOpacity(0.2), letterSpacing: 1),
                       isDense: true,
                       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                       filled: true,
-                      fillColor: Colors.white.withOpacity(0.05),
+                      fillColor: AppTheme.darkBgTertiary,
                       border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(color: AppTheme.neonPink.withOpacity(0.4)),
+                        borderRadius: BorderRadius.circular(4),
+                        borderSide: BorderSide(color: AppTheme.gold.withOpacity(0.3)),
                       ),
                       enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(color: AppTheme.neonPink.withOpacity(0.3)),
+                        borderRadius: BorderRadius.circular(4),
+                        borderSide: BorderSide(color: AppTheme.gold.withOpacity(0.25)),
                       ),
                       focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(color: AppTheme.neonPink, width: 1.5),
+                        borderRadius: BorderRadius.circular(4),
+                        borderSide: BorderSide(color: AppTheme.gold, width: 1.5),
                       ),
                     ),
                   ),
@@ -440,68 +431,135 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                     Navigator.pop(ctx);
                   },
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: AppTheme.neonPink.withOpacity(0.15),
-                    foregroundColor: AppTheme.neonPink,
-                    side: BorderSide(color: AppTheme.neonPink.withOpacity(0.6)),
+                    backgroundColor: AppTheme.crimson.withOpacity(0.3),
+                    foregroundColor: AppTheme.goldBright,
+                    side: BorderSide(color: AppTheme.gold.withOpacity(0.6)),
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
                   ),
-                  child: const Text('OK', style: TextStyle(fontWeight: FontWeight.bold)),
+                  child: Text('OK', style: AppTheme.cinzel(fontSize: 12, color: AppTheme.goldBright)),
                 ),
               ]),
 
-              const SizedBox(height: 24),
-              Divider(color: Colors.white12),
-              const SizedBox(height: 16),
+              const SizedBox(height: 18),
+              Text('DISPOZITIV ESP32',
+                  style: AppTheme.cinzel(fontSize: 9,
+                      color: AppTheme.parchment.withOpacity(0.4), letterSpacing: 2)),
+              const SizedBox(height: 6),
+              Row(children: [
+                Expanded(
+                  child: TextField(
+                    controller: esp32Ctrl,
+                    style: AppTheme.cinzel(fontSize: 12, color: AppTheme.parchment, letterSpacing: 1),
+                    decoration: InputDecoration(
+                      hintText: '192.168.x.x',
+                      hintStyle: AppTheme.cinzel(fontSize: 11,
+                          color: AppTheme.parchment.withOpacity(0.2), letterSpacing: 1),
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      filled: true,
+                      fillColor: AppTheme.darkBgTertiary,
+                      prefixIcon: Icon(
+                        Esp32Service().isConnected ? Icons.gamepad : Icons.gamepad_outlined,
+                        color: Esp32Service().isConnected
+                            ? AppTheme.neonGreen : AppTheme.parchment.withOpacity(0.3),
+                        size: 18,
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(4),
+                        borderSide: BorderSide(color: AppTheme.gold.withOpacity(0.25)),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(4),
+                        borderSide: BorderSide(
+                          color: Esp32Service().isConnected
+                              ? AppTheme.neonGreen.withOpacity(0.6)
+                              : AppTheme.gold.withOpacity(0.25),
+                        ),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(4),
+                        borderSide: BorderSide(color: AppTheme.gold, width: 1.5),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: () async {
+                    final ip = esp32Ctrl.text.trim();
+                    if (ip.isEmpty) return;
+                    final ok = await Esp32Service().connect(ip);
+                    setSt(() {});
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                        content: Text(ok
+                            ? '⚔ ESP32 conectat! Lupta poate începe!'
+                            : '💀 Eroare conectare ESP32'),
+                        duration: const Duration(seconds: 2),
+                      ));
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.crimson.withOpacity(0.3),
+                    foregroundColor: AppTheme.goldBright,
+                    side: BorderSide(color: AppTheme.gold.withOpacity(0.6)),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                  ),
+                  child: Text(Esp32Service().isConnected ? '✓' : 'OK',
+                      style: AppTheme.cinzel(fontSize: 12, color: AppTheme.goldBright)),
+                ),
+              ]),
 
-              Text('ADMINISTRARE DATE', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1.5)),
+              const SizedBox(height: 22),
+              Divider(color: AppTheme.gold.withOpacity(0.2)),
+              const SizedBox(height: 14),
+              Text('⚔ ADMINISTRAREA REGATULUI',
+                  style: AppTheme.cinzel(fontSize: 9,
+                      color: AppTheme.parchment.withOpacity(0.35), letterSpacing: 2)),
               const SizedBox(height: 12),
 
-              // ── Delete stickers ─────────────────────────────────────
               _SettingsTile(
                 icon: Icons.auto_awesome,
                 color: AppTheme.neonPurple,
-                label: 'Șterge toate stickerele AI',
-                subtitle: 'Elimină toate imaginile generate din librărie',
+                label: 'Distruge blazoanele AI',
+                subtitle: 'Elimină toate blazoanele generate din arhive',
                 onTap: () {
                   Navigator.pop(ctx);
                   _confirmAction(
-                    'Șterge stickerele?',
-                    'Toate stickerele generate vor fi șterse permanent.',
-                    () => _deleteAll('/api/stickers', 'Stickere'),
+                    '🔥 Distruge blazoanele?',
+                    'Toate blazoanele generate vor fi incinerate permanent.',
+                    () => _deleteAll('/api/stickers', 'Blazoane'),
                   );
                 },
               ),
               const SizedBox(height: 10),
-
-              // ── Delete custom posters ───────────────────────────────
               _SettingsTile(
-                icon: Icons.image_not_supported,
-                color: AppTheme.neonCyan,
-                label: 'Șterge posterele custom',
-                subtitle: 'Elimină toate posterele adăugate manual',
+                icon: Icons.account_balance,
+                color: AppTheme.gold,
+                label: 'Distruge cetățile custom',
+                subtitle: 'Elimină toate teritoriile adăugate manual',
                 onTap: () {
                   Navigator.pop(ctx);
                   _confirmAction(
-                    'Șterge posterele custom?',
-                    'Toate posterele custom vor fi șterse permanent.',
-                    () => _deleteAll('/api/custom-posters', 'Postere custom'),
+                    '🏰 Distruge cetățile?',
+                    'Toate cetățile custom vor fi șterse din cronici.',
+                    () => _deleteAll('/api/custom-posters', 'Cetăți custom'),
                   );
                 },
               ),
               const SizedBox(height: 10),
-
-              // ── Reset battles ───────────────────────────────────────
               _SettingsTile(
                 icon: Icons.restart_alt,
                 color: AppTheme.neonRed,
                 label: 'Resetează toate bătăliile',
-                subtitle: 'Șterge teritoriile cucerite — se poate lupta din nou',
+                subtitle: 'Șterge teritoriile cucerite — lupta rencepe de la zero',
                 onTap: () {
                   Navigator.pop(ctx);
                   _confirmAction(
-                    'Resetează bătăliile?',
-                    'Toate teritoriile cucerite vor fi resetate. Posterele vor putea fi recucerite.',
+                    '🔥 Resetare totală?',
+                    'Toate teritoriile cucerite vor fi eliberate. Totul rencepe!',
                     () => _deleteAll('/api/territory/reset', 'Bătălii resetate'),
                   );
                 },
@@ -617,26 +675,27 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   
   Widget _buildTopBar() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter, end: Alignment.bottomCenter,
+          colors: [AppTheme.darkBg, AppTheme.darkBg.withOpacity(0)],
+        ),
+      ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // Logo
-          Text(
-            'iTEC',
-            style: AppTheme.neonTextStyle(
-              color: AppTheme.neonCyan,
-              fontSize: 24,
-            ),
-          ),
-          Text(
-            'OVERRIDE',
-            style: AppTheme.neonTextStyle(
-              color: AppTheme.neonPink,
-              fontSize: 24,
-            ),
-          ),
-          // Connection status
+          Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text('iTEC',
+                style: AppTheme.cinzel(
+                    fontSize: 22, color: AppTheme.goldBright, letterSpacing: 4,
+                    shadows: [Shadow(color: AppTheme.gold, blurRadius: 14)])),
+            Text('OVERRIDE',
+                style: AppTheme.cinzel(
+                    fontSize: 10, color: AppTheme.neonPink, letterSpacing: 6,
+                    weight: FontWeight.normal,
+                    shadows: [Shadow(color: AppTheme.neonPink, blurRadius: 8)])),
+          ]),
           const ConnectionStatus(),
         ],
       ),
@@ -646,257 +705,166 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   Widget _buildDetectionIndicator() {
     final appState = context.read<AppStateProvider>();
     final posterName = appState.posters[_detectedPosterId]?.name ?? _detectedPosterId;
-    
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 40),
+      margin: const EdgeInsets.symmetric(horizontal: 32),
       padding: const EdgeInsets.all(20),
-      decoration: AppTheme.neonBoxDecoration(
-        color: AppTheme.neonGreen,
-        glowIntensity: 0.8,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(
-            Icons.check_circle,
-            color: AppTheme.neonGreen,
-            size: 48,
-          ),
-          const SizedBox(height: 12),
-          Text(
-            'POSTER DETECTED',
-            style: AppTheme.neonTextStyle(
-              color: AppTheme.neonGreen,
-              fontSize: 18,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            posterName ?? '',
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 16,
-            ),
-          ),
-          const SizedBox(height: 16),
-          const Text(
-            'Entering battle...',
-            style: TextStyle(
-              color: Colors.white70,
-              fontSize: 14,
-            ),
-          ),
-        ],
-      ),
+      decoration: AppTheme.panelDecoration(borderColor: AppTheme.neonGreen),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Text('🏰', style: const TextStyle(fontSize: 40)),
+        const SizedBox(height: 10),
+        Text('TERITORIU DESCOPERIT',
+            style: AppTheme.neonTextStyle(color: AppTheme.neonGreen, fontSize: 15)),
+        const SizedBox(height: 6),
+        Text(AppTheme.divider,
+            style: TextStyle(color: AppTheme.gold.withOpacity(0.5), fontSize: 12)),
+        const SizedBox(height: 6),
+        Text((posterName ?? '').toUpperCase(),
+            style: AppTheme.cinzel(
+                fontSize: 14, color: AppTheme.parchment, letterSpacing: 2)),
+        const SizedBox(height: 14),
+        Text('Pregătește-te de luptă, viteaz...',
+            style: AppTheme.cinzel(
+                fontSize: 11, color: AppTheme.parchment.withOpacity(0.55),
+                letterSpacing: 1, weight: FontWeight.normal)),
+      ]),
     );
   }
   
   Widget _buildInstructions() {
     return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppTheme.darkBgSecondary.withOpacity(0.8),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: AppTheme.neonCyan.withOpacity(0.3),
+      padding: const EdgeInsets.all(14),
+      decoration: AppTheme.panelDecoration(),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Text('📗', style: const TextStyle(fontSize: 16)),
+          const SizedBox(width: 10),
+          Text('RECUNOAȘTE BLAZONUL',
+              style: AppTheme.neonTextStyle(color: AppTheme.gold, fontSize: 14)),
+        ]),
+        const SizedBox(height: 6),
+        Text(
+          _isGptProcessing
+              ? 'Vrăjitorul AI analizează imaginea...'
+              : 'Îndreaptă pergamentul spre blazon ~2s\nsau selectează manual cetatea de mai jos',
+          textAlign: TextAlign.center,
+          style: AppTheme.cinzel(
+              fontSize: 11, color: AppTheme.parchment.withOpacity(0.65),
+              letterSpacing: 0.8, weight: FontWeight.normal),
         ),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                Icons.camera_alt,
-                color: AppTheme.neonCyan.withOpacity(0.8),
-                size: 24,
-              ),
-              const SizedBox(width: 12),
-              Text(
-                'SCANEAZA POSTER',
-                style: AppTheme.neonTextStyle(
-                  color: AppTheme.neonCyan,
-                  fontSize: 16,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            _isGptProcessing
-                ? 'AI analizeaza imaginea...'
-                : 'Tine camera spre poster ~ 2s\nsau selecteaza manual mai jos',
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Colors.white70,
-              fontSize: 14,
-            ),
-          ),
-        ],
-      ),
+      ]),
     );
   }
   
   Widget _buildBottomControls() {
     return Container(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Big SCAN button
-          GestureDetector(
-            onTap: _isGptProcessing ? null : () {
-              HapticService.mediumImpact();
-              _runGptDetection();
-            },
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              width: double.infinity,
-              height: 56,
-              margin: const EdgeInsets.symmetric(horizontal: 32),
-              decoration: BoxDecoration(
-                color: _isGptProcessing
-                    ? AppTheme.neonCyan.withOpacity(0.1)
-                    : AppTheme.neonCyan.withOpacity(0.2),
-                borderRadius: BorderRadius.circular(28),
-                border: Border.all(
-                  color: _isGptProcessing
-                      ? AppTheme.neonCyan.withOpacity(0.4)
-                      : AppTheme.neonCyan,
-                  width: 2,
-                ),
-                boxShadow: _isGptProcessing
-                    ? null
-                    : [
-                        BoxShadow(
-                          color: AppTheme.neonCyan.withOpacity(0.4),
-                          blurRadius: 16,
-                          spreadRadius: 2,
-                        )
-                      ],
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  if (_isGptProcessing)
-                    const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: AppTheme.neonCyan,
-                      ),
-                    )
-                  else
-                    const Icon(Icons.document_scanner, color: AppTheme.neonCyan, size: 24),
-                  const SizedBox(width: 12),
-                  Text(
-                    _isGptProcessing ? 'AI SCANEAZA...' : 'SCANEAZA CU AI',
-                    style: TextStyle(
-                      color: _isGptProcessing
-                          ? AppTheme.neonCyan.withOpacity(0.6)
-                          : AppTheme.neonCyan,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 2,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          // Small buttons row
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              _buildControlButton(
-                icon: Icons.group,
-                label: 'TEAM',
-                color: AppTheme.neonPurple,
-                onTap: _showTeamSelector,
-              ),
-              _buildControlButton(
-                icon: Icons.grid_view,
-                label: 'POSTERS',
-                color: AppTheme.neonCyan,
-                onTap: _showPosterSelector,
-              ),
-              _buildControlButton(
-                icon: Icons.map,
-                label: 'HARTA 3D',
-                color: AppTheme.neonGreen,
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const MapScreen()),
-                ),
-              ),
-              _buildControlButton(
-                icon: Icons.auto_awesome,
-                label: 'STICKERE',
-                color: AppTheme.neonPurple,
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const StickerGeneratorScreen()),
-                ),
-              ),
-              _buildControlButton(
-                icon: Icons.settings,
-                label: 'SETĂRI',
-                color: AppTheme.neonPink,
-                onTap: _showSettings,
-              ),
-            ],
-          ),
-        ],
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.bottomCenter, end: Alignment.topCenter,
+          colors: [AppTheme.darkBg, AppTheme.darkBg.withOpacity(0)],
+        ),
       ),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        // ── MAIN SCAN BUTTON ──────────────────────────────────────────
+        GestureDetector(
+          onTap: _isGptProcessing ? null : () {
+            HapticService.mediumImpact();
+            _runGptDetection();
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: double.infinity,
+            height: 58,
+            margin: const EdgeInsets.symmetric(horizontal: 16),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: _isGptProcessing
+                    ? [AppTheme.crimson.withOpacity(0.2), AppTheme.darkBgTertiary]
+                    : [AppTheme.crimson.withOpacity(0.55), AppTheme.crimson.withOpacity(0.3)],
+              ),
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(
+                color: _isGptProcessing
+                    ? AppTheme.gold.withOpacity(0.35)
+                    : AppTheme.gold,
+                width: 1.5,
+              ),
+              boxShadow: _isGptProcessing ? null : [
+                BoxShadow(color: AppTheme.gold.withOpacity(0.3), blurRadius: 18, spreadRadius: 1),
+                BoxShadow(color: AppTheme.crimson.withOpacity(0.4), blurRadius: 10),
+              ],
+            ),
+            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              if (_isGptProcessing)
+                SizedBox(width: 18, height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.gold))
+              else
+                Text('🔮', style: const TextStyle(fontSize: 20)),
+              const SizedBox(width: 12),
+              Text(
+                _isGptProcessing ? 'VRĂJITORUL SCANEAZĂ...' : '⚔  SCANEAZĂ BLAZONUL  ⚔',
+                style: AppTheme.cinzel(
+                    fontSize: 14, letterSpacing: 2,
+                    color: _isGptProcessing
+                        ? AppTheme.gold.withOpacity(0.55)
+                        : AppTheme.goldBright,
+                    shadows: _isGptProcessing ? null :
+                        [Shadow(color: AppTheme.gold, blurRadius: 10)]),
+              ),
+            ]),
+          ),
+        ),
+        const SizedBox(height: 14),
+        // ── ACTION BUTTONS ────────────────────────────────────────────
+        Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+          _buildControlButton(
+              icon: Icons.shield, label: 'TABĂRĂ',
+              color: AppTheme.neonPurple, onTap: _showTeamSelector),
+          _buildControlButton(
+              icon: Icons.account_balance, label: 'CETĂȚI',
+              color: AppTheme.gold, onTap: _showPosterSelector),
+          _buildControlButton(
+              icon: Icons.map, label: 'HARTĂ',
+              color: AppTheme.neonGreen,
+              onTap: () => Navigator.push(
+                  context, MaterialPageRoute(builder: (_) => const MapScreen()))),
+          _buildControlButton(
+              icon: Icons.auto_awesome, label: 'BLASFEMII',
+              color: AppTheme.neonOrange,
+              onTap: () => Navigator.push(
+                  context, MaterialPageRoute(builder: (_) => const StickerGeneratorScreen()))),
+          _buildControlButton(
+              icon: Icons.settings, label: 'PERGAMENT',
+              color: AppTheme.neonPink, onTap: _showSettings),
+        ]),
+      ]),
     );
   }
-  
+
   Widget _buildControlButton({
     required IconData icon,
     required String label,
     required Color color,
     required VoidCallback onTap,
-    bool isLarge = false,
   }) {
-    final size = isLarge ? 70.0 : 56.0;
-    
     return GestureDetector(
-      onTap: () {
-        HapticService.mediumImpact();
-        onTap();
-      },
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: size,
-            height: size,
-            decoration: AppTheme.neonBoxDecoration(
-              color: color,
-              borderRadius: size / 2,
-              glowIntensity: 0.4,
-            ),
-            child: Icon(
-              icon,
-              color: color,
-              size: isLarge ? 32 : 24,
-            ),
+      onTap: () { HapticService.mediumImpact(); onTap(); },
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          width: 52, height: 52,
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: color.withOpacity(0.6), width: 1.2),
+            boxShadow: [BoxShadow(color: color.withOpacity(0.2), blurRadius: 8)],
           ),
-          const SizedBox(height: 8),
-          Text(
-            label,
-            style: TextStyle(
-              color: color,
-              fontSize: 10,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 1,
-            ),
-          ),
-        ],
-      ),
+          child: Icon(icon, color: color, size: 22),
+        ),
+        const SizedBox(height: 5),
+        Text(label,
+            style: AppTheme.cinzel(
+                fontSize: 8, color: color, letterSpacing: 1)),
+      ]),
     );
   }
 }
@@ -928,29 +896,18 @@ class _GptScanningBadgeState extends State<_GptScanningBadge>
   @override
   Widget build(BuildContext context) {
     return FadeTransition(
-      opacity: Tween<double>(begin: 0.5, end: 1.0).animate(_ctrl),
+      opacity: Tween<double>(begin: 0.4, end: 1.0).animate(_ctrl),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: Colors.black87,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: AppTheme.neonCyan, width: 1),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              width: 14,
-              height: 14,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: AppTheme.neonCyan,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Text('AI scanning...', style: TextStyle(color: AppTheme.neonCyan, fontSize: 12)),
-          ],
-        ),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: AppTheme.panelDecoration(borderColor: AppTheme.gold),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          SizedBox(width: 13, height: 13,
+              child: CircularProgressIndicator(strokeWidth: 1.8, color: AppTheme.gold)),
+          const SizedBox(width: 8),
+          Text('🔮 vrăjitorul scanează...',
+              style: AppTheme.cinzel(
+                  fontSize: 10, color: AppTheme.gold, letterSpacing: 1)),
+        ]),
       ),
     );
   }
@@ -983,21 +940,21 @@ class ScanOverlayPainter extends CustomPainter {
     
     // Draw scan frame
     final framePaint = Paint()
-      ..color = isDetected ? AppTheme.neonGreen : AppTheme.neonCyan
+      ..color = isDetected ? AppTheme.neonGreen : AppTheme.gold
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 3;
+      ..strokeWidth = 2;
     
     canvas.drawRRect(
-      RRect.fromRectAndRadius(centerRect, const Radius.circular(20)),
+      RRect.fromRectAndRadius(centerRect, const Radius.circular(8)),
       framePaint,
     );
     
     // Draw corner accents
-    final cornerLength = 30.0;
+    const cornerLength = 30.0;
     final cornerPaint = Paint()
-      ..color = isDetected ? AppTheme.neonGreen : AppTheme.neonCyan
+      ..color = isDetected ? AppTheme.neonGreen : AppTheme.goldBright
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 5
+      ..strokeWidth = 4
       ..strokeCap = StrokeCap.round;
     
     // Top left
@@ -1075,35 +1032,30 @@ class _SettingsTile extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
         decoration: BoxDecoration(
           color: color.withOpacity(0.07),
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(4),
           border: Border.all(color: color.withOpacity(0.35), width: 1),
         ),
-        child: Row(
-          children: [
-            Icon(icon, color: color, size: 22),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(label,
-                      style: TextStyle(
-                          color: color,
-                          fontSize: 13,
-                          fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 2),
-                  Text(subtitle,
-                      style: const TextStyle(
-                          color: Colors.white38, fontSize: 11)),
-                ],
-              ),
-            ),
-            Icon(Icons.chevron_right, color: color.withOpacity(0.5), size: 18),
-          ],
-        ),
+        child: Row(children: [
+          Icon(icon, color: color, size: 20),
+          const SizedBox(width: 12),
+          Expanded(child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label,
+                  style: AppTheme.cinzel(
+                      fontSize: 11, color: color, letterSpacing: 1)),
+              const SizedBox(height: 2),
+              Text(subtitle,
+                  style: AppTheme.cinzel(
+                      fontSize: 9, color: AppTheme.parchment.withOpacity(0.35),
+                      letterSpacing: 0.5, weight: FontWeight.normal)),
+            ],
+          )),
+          Icon(Icons.chevron_right, color: color.withOpacity(0.5), size: 16),
+        ]),
       ),
     );
   }
@@ -1125,95 +1077,61 @@ class _PosterOptionsSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.all(16),
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0D1117),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppTheme.neonCyan.withOpacity(0.6), width: 1.5),
-        boxShadow: [
-          BoxShadow(
-            color: AppTheme.neonCyan.withOpacity(0.15),
-            blurRadius: 20,
-            spreadRadius: 2,
+      margin: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+      decoration: AppTheme.panelDecoration(borderColor: AppTheme.gold),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          width: 36, height: 3,
+          decoration: BoxDecoration(
+            color: AppTheme.gold.withOpacity(0.35),
+            borderRadius: BorderRadius.circular(2),
           ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
+        ),
+        const SizedBox(height: 16),
+        Row(children: [
           Container(
-            width: 40, height: 4,
+            padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: Colors.white24,
-              borderRadius: BorderRadius.circular(2),
+              color: AppTheme.neonGreen.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: AppTheme.neonGreen.withOpacity(0.45)),
             ),
+            child: Text('🏰', style: const TextStyle(fontSize: 24)),
           ),
-          const SizedBox(height: 16),
-          Row(
+          const SizedBox(width: 14),
+          Expanded(child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: AppTheme.neonGreen.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppTheme.neonGreen.withOpacity(0.4)),
-                ),
-                child: Icon(Icons.check_circle, color: AppTheme.neonGreen, size: 28),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'POSTER DETECTAT',
-                      style: TextStyle(
-                        color: AppTheme.neonCyan,
-                        fontSize: 11,
-                        letterSpacing: 2,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      posterName,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+              Text('⚔  CETATE DESCOPERITĂ',
+                  style: AppTheme.cinzel(
+                      fontSize: 9, color: AppTheme.neonGreen, letterSpacing: 2)),
+              const SizedBox(height: 5),
+              Text(posterName.toUpperCase(),
+                  style: AppTheme.cinzel(
+                      fontSize: 16, color: AppTheme.parchment, letterSpacing: 2,
+                      shadows: [Shadow(color: AppTheme.gold.withOpacity(0.5), blurRadius: 8)])),
             ],
-          ),
-          const SizedBox(height: 24),
-          Row(
-            children: [
-              Expanded(
-                child: _OptionButton(
-                  label: 'ENTER BATTLE',
-                  icon: Icons.sports_esports,
-                  color: AppTheme.neonPink,
-                  onTap: onEnterBattle,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _OptionButton(
-                  label: 'VIEW AR',
-                  icon: Icons.view_in_ar,
-                  color: AppTheme.neonCyan,
-                  onTap: onViewAR,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-        ],
-      ),
+          )),
+        ]),
+        const SizedBox(height: 20),
+        Row(children: [
+          Expanded(child: _OptionButton(
+            label: 'INTRĂ În LUPTĂ',
+            icon: Icons.shield,
+            color: AppTheme.crimson,
+            onTap: onEnterBattle,
+          )),
+          const SizedBox(width: 10),
+          Expanded(child: _OptionButton(
+            label: 'HARTĂ AR',
+            icon: Icons.map,
+            color: AppTheme.gold,
+            onTap: onViewAR,
+          )),
+        ]),
+        const SizedBox(height: 6),
+      ]),
     );
   }
 }
@@ -1238,25 +1156,18 @@ class _OptionButton extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 14),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.12),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: color.withOpacity(0.5), width: 1.5),
+          color: color.withOpacity(0.15),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: color.withOpacity(0.6), width: 1.5),
+          boxShadow: [BoxShadow(color: color.withOpacity(0.2), blurRadius: 10)],
         ),
-        child: Column(
-          children: [
-            Icon(icon, color: color, size: 26),
-            const SizedBox(height: 6),
-            Text(
-              label,
-              style: TextStyle(
-                color: color,
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 1.5,
-              ),
-            ),
-          ],
-        ),
+        child: Column(children: [
+          Icon(icon, color: color, size: 24),
+          const SizedBox(height: 6),
+          Text(label,
+              style: AppTheme.cinzel(
+                  fontSize: 10, color: color, letterSpacing: 1.5)),
+        ]),
       ),
     );
   }

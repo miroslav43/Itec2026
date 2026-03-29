@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
+import 'package:sensors_plus/sensors_plus.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
@@ -12,7 +15,9 @@ import '../providers/socket_provider.dart';
 import '../providers/drawing_provider.dart';
 import '../models/stroke_model.dart';
 import '../models/poster_model.dart';
+import '../services/anthem_service.dart';
 import '../services/audio_service.dart';
+import '../services/esp32_service.dart';
 import '../services/haptic_service.dart';
 import '../services/player_stats_service.dart';
 import '../theme/app_theme.dart';
@@ -49,11 +54,141 @@ class _BattleCanvasScreenState extends State<BattleCanvasScreen> {
   bool _leveledUp = false;
   bool _exportingAR = false;
   PlacedSticker? _draggingSticker;
+
+  // ── Glitch state ──────────────────────────────────────────────────────────
+  final Map<String, DateTime> _recentStrokeTeams = {};
+  final ValueNotifier<bool> _glitchNotifier = ValueNotifier<bool>(false);
+  Timer? _glitchCheckTimer;
+
+  // ── ESP32 controller state ─────────────────────────────────────────────────
+  Offset _esp32Cursor = const Offset(0.5, 0.5); // normalized 0-1
+  bool _esp32Spraying = false;
+  Timer? _esp32SprayTimer;
+  StreamSubscription<Esp32Command>? _esp32Sub;
+  StreamSubscription<AccelerometerEvent>? _accelSub;
+  double _accX = 0, _accZ = 0;
+
+  // Joystick direction → color + LED
+  static const _joyColors = {
+    Esp32Command.left:  Color(0xFFFF0040), // red
+    Esp32Command.right: Color(0xFF00D4FF), // blue
+    Esp32Command.up:    Color(0xFF00FF88), // green
+    Esp32Command.down:  Color(0xFFFFE600), // yellow
+  };
   
   @override
   void initState() {
     super.initState();
     _joinRoom();
+    _connectEsp32();
+  }
+
+  void _connectEsp32() {
+    _esp32Sub = Esp32Service().commands.listen(_handleEsp32Command);
+  }
+
+  @override
+  void dispose() {
+    _esp32SprayTimer?.cancel();
+    _esp32Sub?.cancel();
+    _accelSub?.cancel();
+    _glitchCheckTimer?.cancel();
+    _glitchNotifier.dispose();
+    AnthemService().stop();
+    super.dispose();
+  }
+
+  void _recordTeamActivity(String teamId) {
+    if (teamId.isEmpty || _battleEnded) return;
+    _recentStrokeTeams[teamId] = DateTime.now();
+    _updateGlitchState();
+    _glitchCheckTimer?.cancel();
+    _glitchCheckTimer = Timer(const Duration(seconds: 3), _updateGlitchState);
+  }
+
+  void _updateGlitchState() {
+    final cutoff = DateTime.now().subtract(const Duration(seconds: 2));
+    _recentStrokeTeams.removeWhere((_, t) => t.isBefore(cutoff));
+    final should = _recentStrokeTeams.length >= 2;
+    if (_glitchNotifier.value != should) _glitchNotifier.value = should;
+  }
+
+  void _handleEsp32Command(Esp32Command cmd) {
+    if (_battleEnded) return;
+    // Joystick direction → pick color + light ESP32 LED
+    final color = _joyColors[cmd];
+    if (color != null) {
+      context.read<DrawingProvider>().setColor(color);
+      Esp32Service().sendColor(color.red, color.green, color.blue);
+      if (mounted) setState(() {});
+      return;
+    }
+    switch (cmd) {
+      case Esp32Command.sprayStart:
+        _startEsp32Spray();
+      case Esp32Command.sprayStop:
+        _stopEsp32Spray();
+      default:
+        break;
+    }
+  }
+
+  void _startEsp32Spray() {
+    if (_esp32Spraying) return;
+    _esp32Spraying = true;
+    final dp = context.read<DrawingProvider>();
+    dp.startDrawing(StrokePoint(x: _esp32Cursor.dx, y: _esp32Cursor.dy));
+
+    // Accelerometer → cursor velocity (tilt phone to aim)
+    _accelSub = accelerometerEventStream(
+      samplingPeriod: const Duration(milliseconds: 40),
+    ).listen((e) {
+      _accX = e.x;  // tilt stânga/dreapta  (phone vertical)
+      _accZ = e.z;  // tilt sus/jos         (phone vertical, z iese din ecran)
+    });
+
+    AudioService.startSpraySound();
+
+    // Every 40 ms: move cursor by accel + scatter spray points
+    final rng = math.Random();
+    _esp32SprayTimer = Timer.periodic(const Duration(milliseconds: 40), (_) {
+      if (!_esp32Spraying || !mounted) return;
+      const speed = 0.007;
+      const scatter = 0.022; // spray scatter radius (normalized)
+      setState(() {
+        _esp32Cursor = Offset(
+          (_esp32Cursor.dx + _accX * speed).clamp(0.0, 1.0),
+          (_esp32Cursor.dy - _accZ * speed).clamp(0.0, 1.0),
+        );
+      });
+      final dp = context.read<DrawingProvider>();
+      // Centre point
+      dp.addPoint(StrokePoint(x: _esp32Cursor.dx, y: _esp32Cursor.dy));
+      // Scattered satellite points (spray effect)
+      for (int i = 0; i < 5; i++) {
+        final angle = rng.nextDouble() * 2 * math.pi;
+        final dist  = rng.nextDouble() * scatter;
+        dp.addPoint(StrokePoint(
+          x: (_esp32Cursor.dx + math.cos(angle) * dist).clamp(0.0, 1.0),
+          y: (_esp32Cursor.dy + math.sin(angle) * dist).clamp(0.0, 1.0),
+        ));
+      }
+    });
+  }
+
+  void _stopEsp32Spray() {
+    if (!_esp32Spraying) return;
+    _esp32Spraying = false;
+    _esp32SprayTimer?.cancel();
+    _accelSub?.cancel();
+    _accelSub = null;
+    _accX = 0;
+    _accZ = 0;
+    AudioService.stopSpraySound();
+    final appState = context.read<AppStateProvider>();
+    final dp = context.read<DrawingProvider>();
+    final stroke = dp.endDrawing(appState.oderId, appState.teamId);
+    if (stroke != null) _handleStrokeComplete(stroke);
   }
   
   void _joinRoom() {
@@ -64,6 +199,7 @@ class _BattleCanvasScreenState extends State<BattleCanvasScreen> {
     // Setup callbacks
     socketProvider.onStrokeReceived = (stroke) {
       drawingProvider.addRemoteStroke(stroke);
+      _recordTeamActivity(stroke.teamId);
       // Haptic + sound when enemy erases in real time
       if (stroke.isEraser && stroke.teamId != appState.teamId) {
         HapticService.enemyEraseVibration();
@@ -109,6 +245,7 @@ class _BattleCanvasScreenState extends State<BattleCanvasScreen> {
     socketProvider.sendStroke(stroke);
     PlayerStatsService.recordStroke();
     if (!stroke.isEraser) AudioService.playDrawStrokeSound();
+    _recordTeamActivity(stroke.teamId);
   }
 
   Future<void> _checkWinCondition(Territory territory, String myTeamId) async {
@@ -131,6 +268,12 @@ class _BattleCanvasScreenState extends State<BattleCanvasScreen> {
         if (isWinner) {
           AudioService.playWinSound();
           HapticService.winVibration();
+          // Play own team's anthem on conquest
+          final serverUrl = context.read<SocketProvider>().serverUrl;
+          AnthemService().playCelebrationAnthem(
+            serverUrl: serverUrl,
+            teamId: myTeamId,
+          );
         } else {
           AudioService.playLoseSound();
           HapticService.loseVibration();
@@ -314,16 +457,27 @@ class _BattleCanvasScreenState extends State<BattleCanvasScreen> {
       backgroundColor: AppTheme.darkBg,
       body: Stack(
         children: [
-          // Drawing canvas (full screen)
+          // Drawing canvas + glitch wrapper
           Positioned.fill(
-            child: GestureDetector(
-              onTap: () {
-                setState(() => _showToolbar = !_showToolbar);
-              },
-              child: DrawingCanvas(
-                posterId: widget.posterId,
-                posterImageUrl: widget.posterImageUrl,
-                onStrokeComplete: _handleStrokeComplete,
+            child: _GlitchWrapper(
+              glitchNotifier: _glitchNotifier,
+              child: Stack(
+                children: [
+                  GestureDetector(
+                    onTap: () => setState(() => _showToolbar = !_showToolbar),
+                    child: DrawingCanvas(
+                      posterId: widget.posterId,
+                      posterImageUrl: widget.posterImageUrl,
+                      onStrokeComplete: _handleStrokeComplete,
+                    ),
+                  ),
+                  if (Esp32Service().isConnected)
+                    _SprayCursor(
+                      normalizedPos: _esp32Cursor,
+                      active: _esp32Spraying,
+                      color: context.watch<DrawingProvider>().currentColor,
+                    ),
+                ],
               ),
             ),
           ),
@@ -384,24 +538,28 @@ class _BattleCanvasScreenState extends State<BattleCanvasScreen> {
           if (!_isJoined)
             Positioned.fill(
               child: Container(
-                color: AppTheme.darkBg.withOpacity(0.8),
-                child: Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const CircularProgressIndicator(
-                        color: AppTheme.neonCyan,
-                      ),
-                      const SizedBox(height: 20),
-                      Text(
-                        'JOINING BATTLE...',
-                        style: AppTheme.neonTextStyle(
-                          color: AppTheme.neonCyan,
-                          fontSize: 18,
-                        ),
-                      ),
-                    ],
+                decoration: BoxDecoration(
+                  gradient: RadialGradient(
+                    colors: [AppTheme.darkBgTertiary, AppTheme.darkBg],
+                    radius: 1.2,
                   ),
+                ),
+                child: Center(
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    SizedBox(width: 44, height: 44,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2.5, color: AppTheme.gold)),
+                    const SizedBox(height: 22),
+                    Text('⚔  INTRARE ÎN LUPTĂ  ⚔',
+                        style: AppTheme.neonTextStyle(
+                            color: AppTheme.gold, fontSize: 16)),
+                    const SizedBox(height: 8),
+                    Text('Pregătește-ți armele, luptătorule...',
+                        style: AppTheme.cinzel(
+                            fontSize: 11,
+                            color: AppTheme.parchment.withOpacity(0.5),
+                            letterSpacing: 1, weight: FontWeight.normal)),
+                  ]),
                 ),
               ),
             ),
@@ -439,155 +597,90 @@ class _BattleCanvasScreenState extends State<BattleCanvasScreen> {
   }
   
   Widget _buildTopBar(String posterName, bool isConnected) {
+    final accent = isConnected ? AppTheme.neonGreen : AppTheme.neonRed;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [
-            AppTheme.darkBg,
-            AppTheme.darkBg.withOpacity(0),
-          ],
+          colors: [AppTheme.darkBg, AppTheme.darkBg.withOpacity(0)],
         ),
       ),
-      child: Row(
-        children: [
-          // Back button
-          GestureDetector(
-            onTap: () {
-              HapticService.mediumImpact();
-              _leaveRoom();
-            },
-            child: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: AppTheme.neonBoxDecoration(
-                color: AppTheme.neonPink,
-                borderRadius: 8,
-                glowIntensity: 0.3,
-              ),
-              child: const Icon(
-                Icons.arrow_back,
-                color: AppTheme.neonPink,
-                size: 24,
-              ),
-            ),
+      child: Row(children: [
+        // ── Back ──
+        GestureDetector(
+          onTap: () { HapticService.mediumImpact(); _leaveRoom(); },
+          child: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: AppTheme.neonBoxDecoration(
+                color: AppTheme.neonPink, borderRadius: 4, glowIntensity: 0.25),
+            child: const Icon(Icons.arrow_back, color: AppTheme.neonPink, size: 20),
           ),
-          const SizedBox(width: 16),
-          
-          // Poster name
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'BATTLE ZONE',
-                  style: TextStyle(
-                    color: AppTheme.neonCyan.withOpacity(0.7),
-                    fontSize: 10,
-                    letterSpacing: 2,
-                  ),
-                ),
-                Text(
-                  posterName.toUpperCase(),
-                  style: AppTheme.neonTextStyle(
-                    color: AppTheme.neonCyan,
-                    fontSize: 16,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
+        ),
+        const SizedBox(width: 12),
+        // ── Poster name ──
+        Expanded(child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('⚔  CÂMPUL BĂTĂLIEI',
+                style: AppTheme.cinzel(
+                    fontSize: 8, color: AppTheme.gold.withOpacity(0.55),
+                    letterSpacing: 2)),
+            Text(posterName.toUpperCase(),
+                style: AppTheme.neonTextStyle(color: AppTheme.gold, fontSize: 14),
+                overflow: TextOverflow.ellipsis),
+          ],
+        )),
+        // ── Stickers ──
+        GestureDetector(
+          onTap: _openStickerScreen,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+            margin: const EdgeInsets.only(right: 6),
+            decoration: AppTheme.neonBoxDecoration(
+                color: AppTheme.neonPurple, borderRadius: 4, glowIntensity: 0.2),
+            child: Text('🏷 BLAZOANE',
+                style: AppTheme.cinzel(
+                    fontSize: 9, color: AppTheme.neonPurple, letterSpacing: 1)),
           ),
-          
-          // Stickers button
-          GestureDetector(
-            onTap: _openStickerScreen,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              margin: const EdgeInsets.only(right: 8),
-              decoration: AppTheme.neonBoxDecoration(
-                color: AppTheme.neonPurple,
-                borderRadius: 8,
-                glowIntensity: 0.3,
-              ),
-              child: const Text('STICKERE',
-                  style: TextStyle(
-                      color: AppTheme.neonPurple,
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 1.2)),
-            ),
+        ),
+        // ── View AR ──
+        GestureDetector(
+          onTap: _exportingAR ? null : _viewAR,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+            decoration: AppTheme.neonBoxDecoration(
+                color: AppTheme.gold, borderRadius: 4, glowIntensity: 0.35),
+            child: _exportingAR
+                ? SizedBox(width: 14, height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.gold))
+                : Text('🗺 HARTA AR',
+                    style: AppTheme.cinzel(
+                        fontSize: 9, color: AppTheme.gold, letterSpacing: 1)),
           ),
-
-          // View AR button
-          GestureDetector(
-            onTap: _exportingAR ? null : _viewAR,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: AppTheme.neonBoxDecoration(
-                color: AppTheme.neonCyan,
-                borderRadius: 8,
-                glowIntensity: 0.4,
-              ),
-              child: _exportingAR
-                  ? const SizedBox(
-                      width: 16, height: 16,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: AppTheme.neonCyan))
-                  : const Text('VIEW AR',
-                      style: TextStyle(
-                          color: AppTheme.neonCyan,
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1.5)),
-            ),
+        ),
+        const SizedBox(width: 6),
+        // ── Connection dot ──
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          decoration: BoxDecoration(
+            color: accent.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: accent.withOpacity(0.5), width: 1),
           ),
-          const SizedBox(width: 8),
-
-          // Connection indicator
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: (isConnected ? AppTheme.neonGreen : AppTheme.neonRed).withOpacity(0.2),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: isConnected ? AppTheme.neonGreen : AppTheme.neonRed,
-                width: 1,
-              ),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: isConnected ? AppTheme.neonGreen : AppTheme.neonRed,
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: (isConnected ? AppTheme.neonGreen : AppTheme.neonRed).withOpacity(0.5),
-                        blurRadius: 6,
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  isConnected ? 'LIVE' : 'OFFLINE',
-                  style: TextStyle(
-                    color: isConnected ? AppTheme.neonGreen : AppTheme.neonRed,
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 1,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Container(width: 6, height: 6,
+                decoration: BoxDecoration(
+                    shape: BoxShape.circle, color: accent,
+                    boxShadow: [BoxShadow(color: accent.withOpacity(0.5), blurRadius: 5)])),
+            const SizedBox(width: 5),
+            Text(isConnected ? 'VIU' : 'MORT',
+                style: AppTheme.cinzel(
+                    fontSize: 9, color: accent, letterSpacing: 1)),
+          ]),
+        ),
+      ]),
     );
   }
 }
@@ -771,142 +864,271 @@ class _BattleResultOverlayState extends State<_BattleResultOverlay>
 
   @override
   Widget build(BuildContext context) {
-    final color = widget.won ? AppTheme.neonGreen : AppTheme.neonRed;
-    final emoji = widget.won ? '🏆' : '💀';
-    final title = widget.won ? 'VICTORIE!' : 'ÎNFRÂNGERE';
+    final color   = widget.won ? AppTheme.neonGreen : AppTheme.neonRed;
+    final emoji   = widget.won ? '🏆' : '💀';
+    final title   = widget.won ? 'GLORIA VICTORIEI' : 'ONOAREA CĂZUTĂ';
     final subtitle = widget.won
-        ? 'Ai cucerit 80% din afiș!'
-        : 'Inamicul a cucerit 80% din afiș.';
+        ? 'Ai cucerit 80% din afiș! Stema ta domină cetatea!'
+        : 'Inamicul a cucerit 80% din afiș. Recucerește ce ți-a fost luat!';
 
     return FadeTransition(
       opacity: _fade,
       child: Container(
-        color: Colors.black.withOpacity(0.82),
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment.center,
+            radius: 1.4,
+            colors: [
+              color.withOpacity(0.08),
+              Colors.black.withOpacity(0.88),
+            ],
+          ),
+        ),
         child: Center(
           child: ScaleTransition(
             scale: _scale,
             child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 32),
+              margin: const EdgeInsets.symmetric(horizontal: 24),
               padding: const EdgeInsets.all(28),
-              decoration: BoxDecoration(
-                color: AppTheme.darkBgSecondary,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: color, width: 2),
-                boxShadow: [BoxShadow(color: color.withOpacity(0.35), blurRadius: 30)],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(emoji, style: const TextStyle(fontSize: 56)),
-                  const SizedBox(height: 12),
-                  Text(
-                    title,
-                    style: TextStyle(
-                      color: color,
-                      fontSize: 28,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 3,
-                      shadows: [Shadow(color: color, blurRadius: 12)],
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    subtitle,
-                    style: const TextStyle(color: Colors.white60, fontSize: 14),
+              decoration: AppTheme.panelDecoration(borderColor: color),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                // Decorative top
+                Text('✦  ${widget.won ? "⚔" : "💀"}  ✦',
+                    style: TextStyle(fontSize: 28, color: color,
+                        shadows: [Shadow(color: color, blurRadius: 14)])),
+                const SizedBox(height: 10),
+                Text(title,
                     textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 20),
+                    style: AppTheme.cinzel(
+                        fontSize: 22, color: color, letterSpacing: 3,
+                        shadows: [Shadow(color: color, blurRadius: 14),
+                                  Shadow(color: color.withOpacity(0.4), blurRadius: 28)])),
+                const SizedBox(height: 10),
+                Text(AppTheme.divider,
+                    style: TextStyle(color: AppTheme.gold.withOpacity(0.5), fontSize: 14)),
+                const SizedBox(height: 8),
+                Text(subtitle,
+                    style: AppTheme.cinzel(fontSize: 11,
+                        color: AppTheme.parchment.withOpacity(0.75),
+                        letterSpacing: 0.8, weight: FontWeight.normal),
+                    textAlign: TextAlign.center),
+                const SizedBox(height: 20),
+                // XP badge
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
+                  decoration: AppTheme.panelDecoration(borderColor: AppTheme.gold),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Text('⚔', style: TextStyle(fontSize: 16, color: AppTheme.goldBright)),
+                    const SizedBox(width: 8),
+                    Text('+${widget.xpGained} XP',
+                        style: AppTheme.cinzel(
+                            fontSize: 18, color: AppTheme.goldBright, letterSpacing: 2,
+                            shadows: [Shadow(color: AppTheme.gold, blurRadius: 10)])),
+                  ]),
+                ),
+                if (widget.leveledUp) ...[
+                  const SizedBox(height: 12),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: AppTheme.neonYellow.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: AppTheme.neonYellow.withOpacity(0.4)),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.bolt, color: AppTheme.neonYellow, size: 20),
-                        const SizedBox(width: 6),
-                        Text(
-                          '+${widget.xpGained} XP',
-                          style: const TextStyle(
-                            color: AppTheme.neonYellow,
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (widget.leveledUp) ...[
-                    const SizedBox(height: 12),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: AppTheme.neonCyan.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: AppTheme.neonCyan.withOpacity(0.5)),
-                      ),
-                      child: Text(
-                        '⬆ LEVEL UP → LVL ${widget.newLevel}!',
-                        style: const TextStyle(
-                          color: AppTheme.neonCyan,
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1,
-                        ),
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 24),
-                  if (!widget.won && widget.onReconquer != null) ...[  
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        icon: const Icon(Icons.replay, size: 18),
-                        label: const Text(
-                          'LUPTĂ DIN NOU',
-                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, letterSpacing: 1.5),
-                        ),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppTheme.neonCyan.withOpacity(0.15),
-                          foregroundColor: AppTheme.neonCyan,
-                          side: const BorderSide(color: AppTheme.neonCyan),
-                          padding: const EdgeInsets.symmetric(vertical: 13),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        ),
-                        onPressed: widget.onReconquer,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                  ],
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: color.withOpacity(0.2),
-                        foregroundColor: color,
-                        side: BorderSide(color: color),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12)),
-                      ),
-                      onPressed: widget.onClose,
-                      child: const Text(
-                        'ÎNAPOI',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 2),
-                      ),
-                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    decoration: AppTheme.panelDecoration(borderColor: AppTheme.neonGreen),
+                    child: Text('⬆ RANG NOU — NVL ${widget.newLevel}!',
+                        style: AppTheme.cinzel(
+                            fontSize: 12, color: AppTheme.neonGreen, letterSpacing: 1.5,
+                            shadows: [Shadow(color: AppTheme.neonGreen, blurRadius: 8)])),
                   ),
                 ],
-              ),
+                const SizedBox(height: 24),
+                if (!widget.won && widget.onReconquer != null) ...[
+                  SizedBox(width: double.infinity,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.crimson.withOpacity(0.35),
+                        foregroundColor: AppTheme.goldBright,
+                        side: BorderSide(color: AppTheme.gold.withOpacity(0.7), width: 1.5),
+                        padding: const EdgeInsets.symmetric(vertical: 13),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                      ),
+                      onPressed: widget.onReconquer,
+                      child: Text('⚔  RECUCEREȘTE',
+                          style: AppTheme.cinzel(fontSize: 13, color: AppTheme.goldBright, letterSpacing: 2)),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                ],
+                SizedBox(width: double.infinity,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: color.withOpacity(0.15),
+                      foregroundColor: color,
+                      side: BorderSide(color: color.withOpacity(0.6), width: 1.5),
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                    ),
+                    onPressed: widget.onClose,
+                    child: Text('RETRAGE-TE',
+                        style: AppTheme.cinzel(fontSize: 13, color: color, letterSpacing: 2)),
+                  ),
+                ),
+              ]),
             ),
           ),
         ),
       ),
     );
   }
+}
+
+// ── ESP32 Spray Cursor ────────────────────────────────────────────────────────
+
+class _SprayCursor extends StatefulWidget {
+  final Offset normalizedPos;
+  final bool active;
+  final Color color;
+
+  const _SprayCursor({
+    required this.normalizedPos,
+    required this.active,
+    required this.color,
+  });
+
+  @override
+  State<_SprayCursor> createState() => _SprayCursorState();
+}
+
+class _SprayCursorState extends State<_SprayCursor>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _anim;
+
+  @override
+  void initState() {
+    super.initState();
+    _anim = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 500),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _anim.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: LayoutBuilder(builder: (ctx, box) {
+          final cx = widget.normalizedPos.dx * box.maxWidth;
+          final cy = widget.normalizedPos.dy * box.maxHeight;
+          const size = 72.0;
+          return AnimatedBuilder(
+            animation: _anim,
+            builder: (_, __) => Stack(children: [
+              Positioned(
+                left: cx - size / 2,
+                top: cy - size / 2,
+                child: CustomPaint(
+                  size: const Size(size, size),
+                  painter: _SprayCursorPainter(
+                    active: widget.active,
+                    color: widget.color,
+                    pulse: _anim.value,
+                  ),
+                ),
+              ),
+            ]),
+          );
+        }),
+      ),
+    );
+  }
+}
+
+class _SprayCursorPainter extends CustomPainter {
+  final bool active;
+  final Color color;
+  final double pulse; // 0.0 – 1.0
+
+  _SprayCursorPainter({
+    required this.active,
+    required this.color,
+    required this.pulse,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+    final rng = math.Random(7); // fixed seed → stable dot positions
+
+    // ── Outer ring (pulsing when active) ──────────────────────────────────────
+    final outerR = active ? 26.0 + pulse * 8.0 : 20.0;
+    final ringPaint = Paint()
+      ..color = color.withOpacity(active ? 0.55 + pulse * 0.25 : 0.35)
+      ..strokeWidth = active ? 2.5 : 1.5
+      ..style = PaintingStyle.stroke;
+
+    if (active) {
+      // Dashed ring
+      const segments = 12;
+      const step = 2 * math.pi / segments;
+      for (int i = 0; i < segments; i++) {
+        if (i.isEven) continue;
+        canvas.drawArc(
+          Rect.fromCircle(center: Offset(cx, cy), radius: outerR),
+          i * step, step, false, ringPaint,
+        );
+      }
+    } else {
+      canvas.drawCircle(Offset(cx, cy), outerR, ringPaint);
+    }
+
+    // ── Inner solid dot ───────────────────────────────────────────────────────
+    canvas.drawCircle(
+      Offset(cx, cy),
+      active ? 4.0 + pulse * 1.5 : 3.5,
+      Paint()..color = Colors.white,
+    );
+
+    // ── Crosshair ─────────────────────────────────────────────────────────────
+    final linePaint = Paint()
+      ..color = Colors.white.withOpacity(0.75)
+      ..strokeWidth = 1.2;
+    canvas.drawLine(Offset(cx - 12, cy), Offset(cx - 5, cy), linePaint);
+    canvas.drawLine(Offset(cx + 5,  cy), Offset(cx + 12, cy), linePaint);
+    canvas.drawLine(Offset(cx, cy - 12), Offset(cx, cy - 5), linePaint);
+    canvas.drawLine(Offset(cx, cy + 5),  Offset(cx, cy + 12), linePaint);
+
+    // ── Spray particles (only when active) ────────────────────────────────────
+    if (active) {
+      final dotPaint = Paint()..style = PaintingStyle.fill;
+      for (int i = 0; i < 22; i++) {
+        final angle = rng.nextDouble() * 2 * math.pi;
+        final dist  = (outerR * 0.4) + rng.nextDouble() * (outerR * 0.6);
+        final opacity = ((1.0 - dist / outerR) * pulse * 0.85).clamp(0.0, 1.0);
+        final dotR  = 0.9 + rng.nextDouble() * 2.2;
+        dotPaint.color = color.withOpacity(opacity);
+        canvas.drawCircle(
+          Offset(cx + math.cos(angle) * dist, cy + math.sin(angle) * dist),
+          dotR, dotPaint,
+        );
+      }
+
+      // Glow behind centre
+      canvas.drawCircle(
+        Offset(cx, cy),
+        8.0 + pulse * 6.0,
+        Paint()
+          ..color = color.withOpacity(0.18 * pulse)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_SprayCursorPainter old) =>
+      old.active != active || old.pulse != pulse || old.color != color;
 }
 
 // ── Live Score Bar ────────────────────────────────────────────────────────────
@@ -923,17 +1145,13 @@ class _LiveScoreBar extends StatelessWidget {
 
     if (teams.isEmpty) {
       return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-        decoration: BoxDecoration(
-          color: Colors.black54,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: Colors.white12),
-        ),
-        child: const Center(
-          child: Text(
-            'Incepe sa desenezi pentru a cuceri teritoriu!',
-            style: TextStyle(color: Colors.white38, fontSize: 11),
-          ),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: AppTheme.panelDecoration(),
+        child: Center(
+          child: Text('Înfige-ți sabia în pământ și cucerește teritoriul!',
+              style: AppTheme.cinzel(
+                  fontSize: 10, color: AppTheme.parchment.withOpacity(0.35),
+                  letterSpacing: 0.8, weight: FontWeight.normal)),
         ),
       );
     }
@@ -949,60 +1167,176 @@ class _LiveScoreBar extends StatelessWidget {
     final unclaimed = (100 - totalClaimed).clamp(0, 100);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.black54,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white12),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: sorted.map((entry) {
-              final isMe = entry.key == myTeamId;
-              final color = AppTheme.teamColors[entry.key] ?? AppTheme.neonCyan;
-              final pct = entry.value.percentage;
-              return Expanded(
-                child: Text(
-                  isMe ? 'TU $pct%' : '${entry.key.toUpperCase()} $pct%',
-                  textAlign: isMe ? TextAlign.start : TextAlign.end,
-                  style: TextStyle(
-                    color: color,
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                    shadows: [Shadow(color: color, blurRadius: 8)],
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: AppTheme.panelDecoration(),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Row(
+          children: sorted.map((entry) {
+            final isMe  = entry.key == myTeamId;
+            final color = AppTheme.teamColors[entry.key] ?? AppTheme.gold;
+            final pct   = entry.value.percentage;
+            return Expanded(
+              child: Text(
+                isMe ? '⚔ TU $pct%' : '${entry.key.toUpperCase()} $pct%',
+                textAlign: isMe ? TextAlign.start : TextAlign.end,
+                style: AppTheme.cinzel(
+                    fontSize: 11, color: color, letterSpacing: 1,
+                    shadows: [Shadow(color: color, blurRadius: 6)]),
+              ),
+            );
+          }).toList(),
+        ),
+        const SizedBox(height: 5),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(2),
+          child: SizedBox(
+            height: 7,
+            child: Row(children: [
+              ...sorted.where((e) => e.value.percentage > 0).map((entry) =>
+                Expanded(
+                  flex: entry.value.percentage,
+                  child: Container(
+                    color: AppTheme.teamColors[entry.key] ?? AppTheme.gold,
                   ),
-                ),
-              );
-            }).toList(),
+                )),
+              if (unclaimed > 0)
+                Expanded(flex: unclaimed,
+                    child: Container(color: AppTheme.gold.withOpacity(0.08))),
+            ]),
           ),
-          const SizedBox(height: 5),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: SizedBox(
-              height: 10,
-              child: Row(
-                children: [
-                  ...sorted.where((e) => e.value.percentage > 0).map((entry) {
-                    return Expanded(
-                      flex: entry.value.percentage,
-                      child: Container(
-                        color: AppTheme.teamColors[entry.key] ?? AppTheme.neonCyan,
-                      ),
-                    );
-                  }),
-                  if (unclaimed > 0)
-                    Expanded(
-                      flex: unclaimed,
-                      child: Container(color: Colors.white12),
-                    ),
-                ],
+        ),
+      ]),
+    );
+  }
+}
+
+// ── Glitch Wrapper ────────────────────────────────────────────────────────────
+
+class _GlitchWrapper extends StatefulWidget {
+  final Widget child;
+  final ValueNotifier<bool> glitchNotifier;
+
+  const _GlitchWrapper({required this.child, required this.glitchNotifier});
+
+  @override
+  State<_GlitchWrapper> createState() => _GlitchWrapperState();
+}
+
+class _GlitchWrapperState extends State<_GlitchWrapper>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  final _rng = math.Random();
+  Offset _shake = Offset.zero;
+  double _tick = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 80),
+    )..addListener(_onTick);
+    widget.glitchNotifier.addListener(_onGlitchChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.glitchNotifier.removeListener(_onGlitchChanged);
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _onGlitchChanged() {
+    if (widget.glitchNotifier.value) {
+      _ctrl.repeat();
+    } else {
+      _ctrl.stop();
+      if (mounted) setState(() { _shake = Offset.zero; _tick = 0; });
+    }
+  }
+
+  void _onTick() {
+    if (!mounted) return;
+    setState(() {
+      _tick = _ctrl.value;
+      _shake = Offset(
+        (_rng.nextDouble() - 0.5) * 10,
+        (_rng.nextDouble() - 0.5) * 5,
+      );
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final glitching = widget.glitchNotifier.value;
+    return Stack(
+      children: [
+        Transform.translate(
+          offset: _shake,
+          child: widget.child,
+        ),
+        if (glitching)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: CustomPaint(
+                painter: _GlitchPainter(_rng, _tick),
               ),
             ),
           ),
-        ],
-      ),
+      ],
     );
   }
+}
+
+// ── Glitch Painter ────────────────────────────────────────────────────────────
+
+class _GlitchPainter extends CustomPainter {
+  final math.Random _rng;
+  final double _tick;
+
+  _GlitchPainter(this._rng, this._tick);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Horizontal tear strips
+    final tearPaint = Paint();
+    for (int i = 0; i < 5; i++) {
+      final y = _rng.nextDouble() * size.height;
+      final h = 2.0 + _rng.nextDouble() * 10;
+      final shift = (_rng.nextDouble() - 0.5) * 24;
+      tearPaint.color = (i.isEven
+              ? const Color(0x99FF0040)
+              : const Color(0x990040FF))
+          .withOpacity(0.3 + _rng.nextDouble() * 0.4);
+      canvas.drawRect(Rect.fromLTWH(shift, y, size.width, h), tearPaint);
+    }
+
+    // Vertical RGB fringe lines
+    final rx = _rng.nextDouble() * size.width;
+    canvas.drawRect(
+      Rect.fromLTWH(rx - 2, 0, 2, size.height),
+      Paint()..color = const Color(0x44FF0000),
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(rx + 1, 0, 2, size.height),
+      Paint()..color = const Color(0x440000FF),
+    );
+
+    // Scan-line vignette
+    final scanPaint = Paint()..color = Colors.black.withOpacity(0.12);
+    for (double y = 0; y < size.height; y += 4) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), scanPaint);
+    }
+
+    // Full-screen flicker pulse (rare)
+    if (_tick > 0.85) {
+      canvas.drawRect(
+        Offset.zero & size,
+        Paint()..color = Colors.white.withOpacity(0.04),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _GlitchPainter old) => true;
 }

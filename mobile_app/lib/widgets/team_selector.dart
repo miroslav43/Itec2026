@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../providers/app_state_provider.dart';
 import '../providers/socket_provider.dart';
 import '../services/anthem_service.dart';
+import '../services/esp32_service.dart';
 import '../services/haptic_service.dart';
 import '../theme/app_theme.dart';
 
@@ -72,40 +73,41 @@ class _TeamSelectorState extends State<TeamSelector> {
     return Color(int.parse(hex, radix: 16));
   }
 
+  static Map<String, String> _teamLabel(String id) => switch (id) {
+    'red'    => {'name': 'VALAHIA',  'region': 'Muntenia'},
+    'blue'   => {'name': 'ARDEAL',   'region': 'Transilvania'},
+    'green'  => {'name': 'MOLDOVA',  'region': 'Bucovina'},
+    'purple' => {'name': 'ARCANE',   'region': 'Dobrogea'},
+    _        => {'name': id.toUpperCase(), 'region': ''},
+  };
+
   @override
   Widget build(BuildContext context) {
     final appState = context.watch<AppStateProvider>();
 
     return Container(
       margin: const EdgeInsets.all(16),
-      decoration: AppTheme.neonBoxDecoration(
-        color: AppTheme.neonPurple,
-        glowIntensity: 0.4,
-      ),
+      decoration: AppTheme.panelDecoration(borderColor: AppTheme.gold),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           // Header
           Container(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
             decoration: BoxDecoration(
               border: Border(
-                bottom: BorderSide(
-                  color: AppTheme.neonPurple.withOpacity(0.3),
-                  width: 1,
-                ),
+                bottom: BorderSide(color: AppTheme.gold.withOpacity(0.35), width: 1),
               ),
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.shield, color: AppTheme.neonPurple, size: 20),
-                const SizedBox(width: 8),
-                Text(
-                  'CHOOSE YOUR TEAM',
-                  style: AppTheme.neonTextStyle(
-                      color: AppTheme.neonPurple, fontSize: 16),
-                ),
+                Text('🛡', style: const TextStyle(fontSize: 18)),
+                const SizedBox(width: 10),
+                Text('ALEGE-ȚI TABĂRA',
+                    style: AppTheme.neonTextStyle(color: AppTheme.gold, fontSize: 15)),
+                const SizedBox(width: 10),
+                Text('🛡', style: const TextStyle(fontSize: 18)),
               ],
             ),
           ),
@@ -118,70 +120,59 @@ class _TeamSelectorState extends State<TeamSelector> {
               children: appState.teams.map((team) {
                 final isSelected = appState.teamId == team.id;
                 final color = _parseColor(team.color);
+                final label = _teamLabel(team.id);
                 return GestureDetector(
                   onTap: () {
                     HapticService.mediumImpact();
                     appState.setTeam(team.id);
+                    final c = _parseColor(team.color);
+                    Esp32Service().sendColor(c.red, c.green, c.blue);
                     Future.delayed(const Duration(milliseconds: 300),
                         () => Navigator.pop(context));
                   },
                   child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    width: 70,
+                    duration: const Duration(milliseconds: 180),
+                    width: 72,
                     padding: const EdgeInsets.symmetric(vertical: 12),
                     decoration: BoxDecoration(
-                      color: isSelected
-                          ? color.withOpacity(0.3)
-                          : Colors.transparent,
-                      borderRadius: BorderRadius.circular(12),
+                      color: isSelected ? color.withOpacity(0.22) : AppTheme.darkBgSecondary,
+                      borderRadius: BorderRadius.circular(4),
                       border: Border.all(
-                        color: isSelected
-                            ? color
-                            : color.withOpacity(0.3),
+                        color: isSelected ? color : color.withOpacity(0.35),
                         width: isSelected ? 2 : 1,
                       ),
                       boxShadow: isSelected
-                          ? [BoxShadow(
-                              color: color.withOpacity(0.4),
-                              blurRadius: 12,
-                              spreadRadius: 2,
-                            )]
+                          ? [BoxShadow(color: color.withOpacity(0.45), blurRadius: 14, spreadRadius: 1),
+                             BoxShadow(color: AppTheme.gold.withOpacity(0.15), blurRadius: 20)]
                           : null,
                     ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 32,
-                          height: 32,
-                          decoration: BoxDecoration(
-                            color: color,
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(
-                                  color: color.withOpacity(0.5),
-                                  blurRadius: 8),
-                            ],
-                          ),
-                          child: isSelected
-                              ? const Icon(Icons.check,
-                                  color: Colors.white, size: 18)
-                              : null,
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      // Shield icon coloured
+                      Container(
+                        width: 34, height: 34,
+                        decoration: BoxDecoration(
+                          color: color.withOpacity(isSelected ? 0.9 : 0.5),
+                          borderRadius: BorderRadius.circular(3),
+                          border: Border.all(color: AppTheme.gold.withOpacity(0.4)),
+                          boxShadow: isSelected
+                              ? [BoxShadow(color: color.withOpacity(0.55), blurRadius: 8)] : null,
                         ),
-                        const SizedBox(height: 8),
-                        Text(
-                          team.id.toUpperCase(),
-                          style: TextStyle(
-                            color: isSelected
-                                ? color
-                                : color.withOpacity(0.7),
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 1,
-                          ),
-                        ),
-                      ],
-                    ),
+                        child: isSelected
+                            ? Icon(Icons.shield, color: Colors.white.withOpacity(0.9), size: 20)
+                            : Icon(Icons.shield_outlined, color: Colors.white.withOpacity(0.55), size: 20),
+                      ),
+                      const SizedBox(height: 7),
+                      Text(label['name']!,
+                          style: AppTheme.cinzel(
+                              fontSize: 9,
+                              color: isSelected ? color : color.withOpacity(0.65),
+                              letterSpacing: 1)),
+                      Text(label['region']!,
+                          style: AppTheme.cinzel(
+                              fontSize: 7, weight: FontWeight.normal,
+                              color: AppTheme.parchment.withOpacity(0.45),
+                              letterSpacing: 0.5)),
+                    ]),
                   ),
                 );
               }).toList(),
@@ -195,106 +186,79 @@ class _TeamSelectorState extends State<TeamSelector> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(children: [
-                  Icon(Icons.music_note,
-                      color: AppTheme.neonCyan.withOpacity(0.7), size: 14),
-                  const SizedBox(width: 6),
-                  Text('IMN ECHIPĂ',
-                      style: TextStyle(
-                          color: Colors.white38,
-                          fontSize: 10,
-                          letterSpacing: 1.5)),
+                  Text('♪', style: TextStyle(fontSize: 13, color: AppTheme.gold.withOpacity(0.7))),
+                  const SizedBox(width: 7),
+                  Text('IMN DE LUPTĂ',
+                      style: AppTheme.cinzel(
+                          fontSize: 9, color: AppTheme.parchment.withOpacity(0.45),
+                          letterSpacing: 2)),
                 ]),
                 const SizedBox(height: 8),
                 ...appState.teams.map((team) {
                   final color = _parseColor(team.color);
-                  final hasAnthem = _anthemExists[team.id] ?? false;
+                  final hasAnthem  = _anthemExists[team.id] ?? false;
                   final isUploading = _uploading[team.id] ?? false;
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 6),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 10,
-                          height: 10,
-                          margin: const EdgeInsets.only(right: 8),
-                          decoration: BoxDecoration(
-                            color: color,
-                            shape: BoxShape.circle,
-                          ),
+                    child: Row(children: [
+                      Container(
+                        width: 8, height: 8,
+                        margin: const EdgeInsets.only(right: 8),
+                        decoration: BoxDecoration(
+                          color: color, borderRadius: BorderRadius.circular(2),
                         ),
-                        Text(
-                          team.id.toUpperCase(),
-                          style: TextStyle(
-                              color: color,
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold),
-                        ),
-                        const SizedBox(width: 8),
-                        if (hasAnthem)
-                          Row(children: [
-                            Icon(Icons.music_note,
-                                color: AppTheme.neonGreen, size: 14),
-                            const SizedBox(width: 4),
-                            Text('imn setat',
-                                style: TextStyle(
-                                    color: AppTheme.neonGreen, fontSize: 10)),
-                          ])
-                        else
-                          Text('fără imn',
-                              style: TextStyle(
-                                  color: Colors.white24, fontSize: 10)),
-                        const Spacer(),
-                        if (isUploading)
-                          const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: AppTheme.neonCyan))
-                        else
-                          Row(children: [
-                            GestureDetector(
-                              onTap: () => _pickAndUploadAnthem(team.id),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: color.withOpacity(0.1),
-                                  borderRadius: BorderRadius.circular(6),
-                                  border: Border.all(
-                                      color: color.withOpacity(0.4)),
-                                ),
-                                child: Row(children: [
-                                  Icon(
-                                    hasAnthem
-                                        ? Icons.edit
-                                        : Icons.upload_file,
-                                    color: color,
-                                    size: 13,
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    hasAnthem ? 'schimbă' : 'import MP3',
-                                    style: TextStyle(
-                                        color: color, fontSize: 10),
-                                  ),
-                                ]),
+                      ),
+                      Text(team.id.toUpperCase(),
+                          style: AppTheme.cinzel(fontSize: 10, color: color, letterSpacing: 1)),
+                      const SizedBox(width: 8),
+                      if (hasAnthem)
+                        Row(children: [
+                          Text('♪', style: TextStyle(fontSize: 12, color: AppTheme.neonGreen)),
+                          const SizedBox(width: 4),
+                          Text('imn setat',
+                              style: AppTheme.cinzel(
+                                  fontSize: 9, color: AppTheme.neonGreen,
+                                  letterSpacing: 1, weight: FontWeight.normal)),
+                        ])
+                      else
+                        Text('fără imn',
+                            style: AppTheme.cinzel(
+                                fontSize: 9, color: AppTheme.parchment.withOpacity(0.25),
+                                letterSpacing: 1, weight: FontWeight.normal)),
+                      const Spacer(),
+                      if (isUploading)
+                        SizedBox(width: 14, height: 14,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 1.5, color: AppTheme.gold))
+                      else
+                        Row(children: [
+                          GestureDetector(
+                            onTap: () => _pickAndUploadAnthem(team.id),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: color.withOpacity(0.08),
+                                borderRadius: BorderRadius.circular(3),
+                                border: Border.all(color: color.withOpacity(0.4)),
                               ),
+                              child: Row(children: [
+                                Icon(hasAnthem ? Icons.edit : Icons.upload_file,
+                                    color: color, size: 12),
+                                const SizedBox(width: 4),
+                                Text(hasAnthem ? 'schimbă' : 'import',
+                                    style: AppTheme.cinzel(
+                                        fontSize: 9, color: color,
+                                        letterSpacing: 1, weight: FontWeight.normal)),
+                              ]),
                             ),
-                            if (hasAnthem) ...[
-                              const SizedBox(width: 6),
-                              GestureDetector(
-                                onTap: () async {
-                                  await _deleteAnthemHttp(team.id);
-                                },
-                                child: Icon(Icons.delete_outline,
-                                    color: AppTheme.neonRed.withOpacity(0.7),
-                                    size: 16),
-                              ),
-                            ],
-                          ]),
-                      ],
-                    ),
+                          ),
+                          if (hasAnthem) ...[const SizedBox(width: 6),
+                            GestureDetector(
+                              onTap: () => _deleteAnthemHttp(team.id),
+                              child: Icon(Icons.close, color: AppTheme.neonRed.withOpacity(0.7), size: 15),
+                            )],
+                        ]),
+                    ]),
                   );
                 }),
               ],
@@ -305,34 +269,29 @@ class _TeamSelectorState extends State<TeamSelector> {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
             child: TextField(
-              onChanged: (value) => appState.setUsername(value),
-              style: const TextStyle(color: Colors.white),
+              onChanged: (v) => appState.setUsername(v),
+              style: AppTheme.cinzel(
+                  fontSize: 13, color: AppTheme.parchment, letterSpacing: 1),
               decoration: InputDecoration(
-                hintText: 'Enter username (optional)',
-                hintStyle:
-                    TextStyle(color: Colors.white.withOpacity(0.3)),
-                prefixIcon: Icon(
-                  Icons.person,
-                  color: AppTheme.neonPurple.withOpacity(0.5),
-                ),
+                hintText: 'NUMELE LUPTĂTORULUI',
+                hintStyle: AppTheme.cinzel(
+                    fontSize: 11, color: AppTheme.parchment.withOpacity(0.25),
+                    letterSpacing: 1.5),
+                prefixIcon: Icon(Icons.person, color: AppTheme.gold.withOpacity(0.5), size: 18),
                 filled: true,
                 fillColor: AppTheme.darkBgTertiary,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide(
-                    color: AppTheme.neonPurple.withOpacity(0.3),
-                  ),
+                  borderRadius: BorderRadius.circular(4),
+                  borderSide: BorderSide(color: AppTheme.gold.withOpacity(0.25)),
                 ),
                 enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide(
-                    color: AppTheme.neonPurple.withOpacity(0.3),
-                  ),
+                  borderRadius: BorderRadius.circular(4),
+                  borderSide: BorderSide(color: AppTheme.gold.withOpacity(0.25)),
                 ),
                 focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide:
-                      const BorderSide(color: AppTheme.neonPurple),
+                  borderRadius: BorderRadius.circular(4),
+                  borderSide: BorderSide(color: AppTheme.gold.withOpacity(0.75), width: 1.5),
                 ),
               ),
             ),

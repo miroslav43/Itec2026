@@ -8,64 +8,42 @@ class ConnectionStatus extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final socketProvider = context.watch<SocketProvider>();
-    final isConnected = socketProvider.isConnected;
-    
+    final isConnected = context.watch<SocketProvider>().isConnected;
+    final accent = isConnected ? AppTheme.neonGreen : AppTheme.neonRed;
+    final label  = isConnected ? 'CETATEA ACTIVA' : 'DECONECTAT';
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
       decoration: BoxDecoration(
-        color: (isConnected ? AppTheme.neonGreen : AppTheme.neonRed).withOpacity(0.1),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: (isConnected ? AppTheme.neonGreen : AppTheme.neonRed).withOpacity(0.5),
-          width: 1,
-        ),
+        color: AppTheme.darkBgSecondary.withOpacity(0.9),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: accent.withOpacity(0.55), width: 1.2),
+        boxShadow: [BoxShadow(color: accent.withOpacity(0.15), blurRadius: 8)],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _buildPulsingDot(isConnected),
-          const SizedBox(width: 6),
-          Text(
-            isConnected ? 'ONLINE' : 'OFFLINE',
-            style: TextStyle(
-              color: isConnected ? AppTheme.neonGreen : AppTheme.neonRed,
-              fontSize: 10,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 0.5,
+          TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0.4, end: 1.0),
+            duration: const Duration(milliseconds: 900),
+            builder: (_, v, __) => Container(
+              width: 7, height: 7,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: accent.withOpacity(isConnected ? v : 1.0),
+                boxShadow: isConnected
+                    ? [BoxShadow(color: accent.withOpacity(0.5 * v), blurRadius: 5)]
+                    : null,
+              ),
             ),
+            onEnd: () {},
           ),
+          const SizedBox(width: 6),
+          Text(label,
+              style: AppTheme.cinzel(
+                  fontSize: 9, color: accent, letterSpacing: 1.2)),
         ],
       ),
-    );
-  }
-  
-  Widget _buildPulsingDot(bool isConnected) {
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0.5, end: 1.0),
-      duration: const Duration(milliseconds: 1000),
-      builder: (context, value, child) {
-        return Container(
-          width: 8,
-          height: 8,
-          decoration: BoxDecoration(
-            color: isConnected 
-                ? AppTheme.neonGreen.withOpacity(value) 
-                : AppTheme.neonRed,
-            shape: BoxShape.circle,
-            boxShadow: isConnected
-                ? [
-                    BoxShadow(
-                      color: AppTheme.neonGreen.withOpacity(0.5 * value),
-                      blurRadius: 6,
-                      spreadRadius: 1,
-                    ),
-                  ]
-                : null,
-          ),
-        );
-      },
-      onEnd: () {},
     );
   }
 }
